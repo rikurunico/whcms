@@ -2,7 +2,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 /**
  * Installation wizard (docs/CONTRACTS.md §15) - app-level phase. A normal spec

@@ -1,4 +1,4 @@
-import { expect, request, test } from '@playwright/test';
+import { expect, request, test } from './fixtures';
 import { API_BASE, MOCK_BASE } from './helpers';
 
 /**

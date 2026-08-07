@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext } from './fixtures';
 import { withAuthRateLimitRetry } from './helpers';
 
 /**

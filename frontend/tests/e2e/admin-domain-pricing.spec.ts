@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext } from './fixtures';
 import { API_BASE, adminToken, authHeaders, clickBtn, newApi, setSessionCookies, uniqueDomainLabel } from './helpers';
 
 /**

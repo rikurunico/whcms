@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext } from './fixtures';
 import { newApi, registerVerifyLogin, setSessionCookies, type Client } from './helpers';
 
 /**

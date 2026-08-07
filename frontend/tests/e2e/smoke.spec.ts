@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 test('root renders the public portal for anonymous visitors, login still reachable', async ({
 	page

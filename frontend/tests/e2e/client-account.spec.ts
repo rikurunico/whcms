@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext } from './fixtures';
 import { loginApi, newApi, registerVerifyLogin, setSessionCookies, type Client } from './helpers';
 
 /**

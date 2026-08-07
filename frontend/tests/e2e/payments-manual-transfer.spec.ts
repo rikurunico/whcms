@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { adminToken, authHeaders, newApi, registerVerifyLogin, setSessionCookies } from './helpers';
 
 const API_BASE = 'http://localhost:8080';

@@ -11,6 +11,14 @@
 	const applyLocale = () => i18n.setLocale(data.locale, { persist: false });
 	applyLocale();
 	$effect(applyLocale);
+
+	// Mark the document once client-side hydration is live. The e2e fixture
+	// waits for this after page.goto: on slow machines a click can otherwise
+	// land on server-rendered markup before its event listeners exist and be
+	// silently lost (tabs, modals, page-size selects).
+	$effect(() => {
+		document.documentElement.dataset.hydrated = '1';
+	});
 </script>
 
 <svelte:head>
