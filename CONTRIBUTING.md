@@ -19,6 +19,12 @@ S3-compatible store (RustFS or MinIO) on `:9000`. Two paths:
 `make help` (repo root) lists every task. `make up` / `make down` start and
 stop the full local stack used by the E2E suite.
 
+After cloning, run **`make hooks`** once: it installs a pre-push hook that
+runs `make lint` (gofmt, golangci-lint, mockserver vet, and the e2e
+fixture-import guard) — the exact lint set CI enforces, so a red lint job
+never gets discovered on the remote. Bypass a single push with
+`SKIP_LINT=1 git push`.
+
 ## Ground rules (enforced by CI)
 
 1. **Backend coverage must stay above 90%.** `make test-backend` runs
@@ -26,7 +32,10 @@ stop the full local stack used by the E2E suite.
    Every new exported function needs tests.
 2. **Every new user-facing frontend flow ships its own Playwright E2E spec**
    in `frontend/tests/e2e/`. Preserve existing `data-testid`s, form
-   `action`s, and field `name`s — the suite keys on them.
+   `action`s, and field `name`s — the suite keys on them. Specs import
+   `{ test, expect }` from `./fixtures` (never `@playwright/test` directly):
+   the shared fixture waits for SvelteKit hydration after navigation, which
+   is what keeps the suite green on slow CI runners.
 3. **Money is IDR-only, `int64` whole rupiah.** Never floats for money.
 4. **Secrets never touch source control or plaintext DB columns.** Dev
    defaults for the local stack are fine; anything real comes from env or the

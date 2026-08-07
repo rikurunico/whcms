@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pre-push: run the same lint checks CI runs, so a red lint job never gets
+# discovered on the remote. Installed via `make hooks`; bypass one push with
+#   SKIP_LINT=1 git push
+set -euo pipefail
+
+if [[ "${SKIP_LINT:-}" == "1" ]]; then
+	echo "[pre-push] SKIP_LINT=1 - skipping lint"
+	exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+echo "[pre-push] make lint (bypass once with SKIP_LINT=1 git push)"
+make -C "$REPO_ROOT" lint

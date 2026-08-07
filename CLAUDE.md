@@ -32,7 +32,9 @@ support tickets, and a WHMCS-style admin + client area. Go API + SvelteKit BFF.
 | `make down` | Stop the local stack (wraps `scripts/e2e-down.sh`). |
 | `make test-backend` | Backend `build` + `vet` + tests **with coverage, enforcing >90%** (wraps `backend/make cover-gate`). Needs a running Postgres; runs `migrate-up` first. |
 | `make test-frontend` | Playwright E2E against the running stack (`make up` first). Filter: `make test-frontend SPEC=admin-ops.spec.ts`. |
-| `make test` | `test-backend` then `test-frontend`. |
+| `make lint` | The exact lint set CI runs: gofmt + golangci-lint (backend), `go vet` (mockserver), e2e fixture-import guard. |
+| `make hooks` | Install the repo git hooks — pre-push runs `make lint` (bypass once: `SKIP_LINT=1 git push`). |
+| `make test` | `lint`, then `test-backend`, then `test-frontend`. |
 
 Prerequisites: Go ≥1.26, Node 22, and locally-running **PostgreSQL 18** (`postgres://root:postgres@localhost:5432/whmcs`), **Redis** (`:6379`), **RustFS/S3** (`:9000`, `rustfsadmin`/`rustfsadmin`, bucket `whmcs`). Full setup: [`README.md`](README.md) and [`docs/E2E.md`](docs/E2E.md). Seeded admin login: `admin@e2e.test` / `AdminE2E!2026`.
 
@@ -136,12 +138,14 @@ The `(public)/**` and `(client)/**` areas use a **dedicated WHMCS "Twenty-One" t
 - The **repository layer is integration-tested** (`//go:build integration`) against real Postgres, so the gate runs unit + integration together and needs a migrated DB (the target runs `migrate-up`). Unit-only (`cd backend && make cover`) is faster but does **not** reach 90% on its own.
 - Test style (CONTRACTS §3): table-driven + testify; services with hand-written fakes of ports (shared in `internal/ports/mocks`, `Mock<Interface>`); adapters with `httptest.Server`; handlers with a Fiber app + mocked services; repos with integration-tagged tests. **Every exported function needs coverage.**
 - **Frontend:** `cd frontend && npm run check` (svelte-check, must be 0 errors) + `npm run build` green; `make test-frontend` (Playwright, 8 critical flows per PRD §13.2) green against the live stack + mockserver.
+- **E2E specs import `{ test, expect }` from `./fixtures`, never from `@playwright/test`** — the shared fixture's `page.goto` waits for SvelteKit hydration (`<html data-hydrated>`); without it, a spec's first click races hydration on slow machines and fails only in CI. `make lint` / `make test-frontend` enforce this. If a form submit may fall back to a native post (its click can race hydration too), call `waitForHydration(page)` before driving pure-JS controls on the resulting document.
 - **Every new frontend feature/route/flow MUST ship its own Playwright E2E coverage** in `frontend/tests/e2e/` — add a new spec or extend an existing one to drive the new happy path (and key error/guard paths) end-to-end. Passing the existing suite without exercising the new behavior is **not** sufficient; new client/public/admin surfaces need `data-testid`s wired so the spec can key on them. This mirrors the backend rule "every exported function needs coverage" — for the frontend, **every new user-facing flow needs an E2E test.**
 
 ---
 
 ## 6. Definition of Done (checklist before you say it's finished)
 
+- [ ] `make lint` clean (gofmt + golangci-lint + mockserver vet + e2e import guard — the same set CI runs).
 - [ ] Backend: `make test-backend` passes (build + vet + tests, **coverage ≥ 90%**).
 - [ ] Frontend: `npm run check` and `npm run build` clean; `make test-frontend` passes (or the relevant `SPEC`).
 - [ ] **New frontend feature/route/flow adds or extends its own Playwright E2E spec** in `frontend/tests/e2e/` (drives the new flow itself — not just passing the pre-existing suite).
