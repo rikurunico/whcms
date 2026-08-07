@@ -124,9 +124,9 @@ func DynamicPackageName(prefix string, limits map[ProvisionKey]int64, toggles Pa
 
 	h := fnv.New64a()
 	for _, k := range keys {
-		fmt.Fprintf(h, "%s=%d;", k, limits[ProvisionKey(k)])
+		_, _ = fmt.Fprintf(h, "%s=%d;", k, limits[ProvisionKey(k)]) // hash.Hash never errors
 	}
-	fmt.Fprintf(h, "feat=%s;shell=%t;cgi=%t;tmpl=%s",
+	_, _ = fmt.Fprintf(h, "feat=%s;shell=%t;cgi=%t;tmpl=%s",
 		toggles.FeatureList, toggles.ShellAccess, toggles.CGIAccess, toggles.TemplatePackage)
 
 	return fmt.Sprintf("%swhcms_spec_%x", prefix, h.Sum64())

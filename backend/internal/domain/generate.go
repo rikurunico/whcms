@@ -113,7 +113,7 @@ func UsernameFromDomain(domain string) string {
 // new candidate instead of converging back to the identical string forever.
 func DisambiguateUsername(base string, serviceID int64) string {
 	h := fnv.New32a()
-	fmt.Fprintf(h, "%s:%d", base, serviceID)
+	_, _ = fmt.Fprintf(h, "%s:%d", base, serviceID) // hash.Hash never errors
 	suffix := strconv.FormatUint(uint64(h.Sum32())%1000, 10)
 	if max := 8 - len(suffix); len(base) > max {
 		base = base[:max]
