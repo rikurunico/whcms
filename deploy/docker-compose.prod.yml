@@ -1,0 +1,215 @@
+# WHCMS — production stack (Coolify / Dokploy ready, PRD §14.3).
+#
+#   docker compose -f deploy/docker-compose.prod.yml up -d
+#
+# Differences from docker-compose.yml (dev):
+#   * No mockserver, no source builds — images are pulled from a registry:
+#       ${REGISTRY:-whcms}/backend:${TAG:-latest}
+#       ${REGISTRY:-whcms}/frontend:${TAG:-latest}
+#     Set REGISTRY/TAG in the platform environment (e.g. ghcr.io/acme, v1.2.0).
+#   * No secret defaults — required values fail fast if unset. Manage them via
+#     the Coolify/Dokploy secrets UI (REQ-DEPLOY-003); never commit them.
+#   * No host port publishing — the platform's built-in Traefik proxy routes
+#     traffic and terminates TLS (REQ-DEPLOY-004). Point the platform at:
+#       frontend :3000 (public site)  and  api :8080 (if the API needs its own
+#       domain for /api/v1/webhooks/duitku; otherwise proxy /api via frontend
+#       domain to the api service).
+#     Traefik labels are injected by Coolify/Dokploy automatically — do not
+#     hand-write them here. The apps respect X-Forwarded-* headers; see the
+#     PROTOCOL_HEADER/HOST_HEADER settings on the frontend service.
+#   * postgres / redis / rustfs ship in-stack by default. To use EXTERNAL
+#     managed services instead: delete the service block + its volume +
+#     the depends_on entries, and point DATABASE_URL / REDIS_ADDR /
+#     RUSTFS_ENDPOINT at the external endpoints.
+#
+# DB migrations run automatically (idempotently) on API startup
+# (REQ-DEPLOY-002), and the API is stateless, so rolling deploys are safe
+# (REQ-DEPLOY-005). /healthz (liveness) and /readyz (readiness, checks
+# PG+Redis+S3) back the platform health probes (REQ-DEPLOY-006).
+
+name: whcms-prod
+
+# Bounded container logs on every service (json-file grows unbounded without
+# this; platforms with their own log driver simply override it).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-env: &backend-env
+  APP_ENV: production
+  APP_PORT: "8080"
+  APP_BASE_URL: ${APP_BASE_URL:?e.g. https://api.whcms.example}
+  FRONTEND_URL: ${FRONTEND_URL:?e.g. https://whcms.example}
+  JWT_SECRET: ${JWT_SECRET:?set via platform secrets}
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?base64 32B — openssl rand -base64 32}
+  DATABASE_URL: ${DATABASE_URL:-postgres://root:${POSTGRES_PASSWORD:?set via platform secrets}@postgres:5432/whmcs?sslmode=disable}
+  REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_DB: ${REDIS_DB:-0}
+  RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-http://rustfs:9000}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?set via platform secrets}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?set via platform secrets}
+  RUSTFS_BUCKET: ${RUSTFS_BUCKET:-whmcs}
+  RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
+  DUITKU_MERCHANT_CODE: ${DUITKU_MERCHANT_CODE:?set via platform secrets}
+  DUITKU_API_KEY: ${DUITKU_API_KEY:?set via platform secrets}
+  DUITKU_ENV: ${DUITKU_ENV:-production}
+  DUITKU_BASE_URL: ${DUITKU_BASE_URL:-}   # empty → derived from DUITKU_ENV
+  RDASH_RESELLER_ID: ${RDASH_RESELLER_ID:-}
+  RDASH_API_KEY: ${RDASH_API_KEY:-}
+  RDASH_BASE_URL: ${RDASH_BASE_URL:-https://api.rdash.id/v1}
+  MAIL_DRIVER: ${MAIL_DRIVER:-smtp}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  # auto derives from SMTP_PORT (465 => implicit TLS, else mandatory STARTTLS).
+  SMTP_ENCRYPTION: ${SMTP_ENCRYPTION:-auto}
+  SMTP_AUTH: ${SMTP_AUTH:-auto}
+  SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-20}
+  SMTP_INSECURE_SKIP_VERIFY: ${SMTP_INSECURE_SKIP_VERIFY:-false}
+  MAIL_HTTP_URL: ${MAIL_HTTP_URL:-}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
+  ADMIN_ALERT_EMAIL: ${ADMIN_ALERT_EMAIL:?alert recipient}
+  ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
+  # Where the installation wizard's bootstrap phase would persist a config it
+  # collected through the web form (docs/CONTRACTS.md §15) — unreachable in
+  # THIS file today since the `:?` vars above already make `docker compose up`
+  # refuse to start without them pre-set via the platform's secret manager
+  # (REQ-DEPLOY-003). Kept for defense-in-depth / consistency with dev compose.
+  ENV_FILE: /data/app.env
+
+services:
+  # ---- infra (remove any of these when using external managed services) ----
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set via platform secrets}
+      POSTGRES_DB: whmcs
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d whmcs"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    # AOF persistence + optional auth: set REDIS_PASSWORD to require it (the
+    # backend passes the same value automatically).
+    command: redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a ${REDIS_PASSWORD}} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rustfs:
+    # Pinned (mutable :latest can pull a breaking upgrade mid-redeploy);
+    # override RUSTFS_VERSION to upgrade deliberately.
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.11}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?set via platform secrets}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?set via platform secrets}
+    volumes:
+      - rustfsdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || wget -q -O /dev/null http://localhost:9000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ---- application ----
+  api:
+    image: ${REGISTRY:-whcms}/backend:${TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    # The API drains in-flight requests for up to 10s on SIGTERM — give it
+    # headroom beyond Docker's 10s default before SIGKILL.
+    stop_grace_period: 30s
+    command: ["/app/api"]
+    environment: *backend-env
+    volumes:
+      - whcms_config:/data
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    image: ${REGISTRY:-whcms}/backend:${TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    # Let in-flight jobs finish (asynq drains on SIGTERM).
+    stop_grace_period: 30s
+    command: ["/app/worker"]
+    environment: *backend-env
+    volumes:
+      - whcms_config:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  frontend:
+    image: ${REGISTRY:-whcms}/frontend:${TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PORT: "3000"
+      # adapter-node caps request bodies at 512KB by default — far below the
+      # ticket-attachment limit the API accepts through the BFF.
+      BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-25M}
+      API_URL: http://api:8080
+      PUBLIC_APP_NAME: ${PUBLIC_APP_NAME:-WHCMS}
+      # Behind the platform proxy, derive origin from X-Forwarded-* headers
+      # (SvelteKit adapter-node) instead of a fixed ORIGIN.
+      PROTOCOL_HEADER: x-forwarded-proto
+      HOST_HEADER: x-forwarded-host
+      ADDRESS_HEADER: x-forwarded-for
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  pgdata:
+  redisdata:
+  rustfsdata:
+  whcms_config:

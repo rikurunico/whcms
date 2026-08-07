@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (build + vet + >90% coverage gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: whmcs_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U root -d whmcs_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://root:postgres@localhost:5432/whmcs_e2e?sslmode=disable
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # S3-compatible storage on :9000 (MinIO stands in for RustFS) — the
+      # installer bootstrap integration tests probe http://localhost:9000.
+      - name: Start S3 (MinIO) on :9000
+        run: |
+          docker run -d --name s3 -p 9000:9000 \
+            -e MINIO_ROOT_USER=rustfsadmin -e MINIO_ROOT_PASSWORD=rustfsadmin \
+            minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && break
+            sleep 1
+          done
+          AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin AWS_REGION=us-east-1 \
+            aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://whmcs || true
+
+      # The cpanel/duitku adapter integration tests exercise the real
+      # mockserver on :9090 and skip (losing coverage) when it is absent.
+      - name: Start mockserver on :9090
+        working-directory: mockserver
+        run: |
+          go build -o /tmp/whcms-mock .
+          nohup /tmp/whcms-mock > /tmp/mockserver.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:9090/mail/messages && break
+            sleep 1
+          done
+
+      - name: make test-backend (coverage gate)
+        run: make test-backend
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.html
+          if-no-files-found: ignore
+
+  lint:
+    name: Backend lint (golangci-lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12
+          working-directory: backend
+
+  mockserver:
+    name: Mockserver (vet + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mockserver/go.mod
+          cache-dependency-path: mockserver/go.sum
+      - name: Vet + test
+        working-directory: mockserver
+        run: |
+          go vet ./...
+          go test -race ./...
+
+  frontend:
+    name: Frontend (svelte-check + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: svelte-check
+        working-directory: frontend
+        run: npm run check
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: E2E (Playwright against the full stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: whmcs_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U root -d whmcs_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Start S3 (MinIO) on :9000
+        run: |
+          docker run -d --name s3 -p 9000:9000 \
+            -e MINIO_ROOT_USER=rustfsadmin -e MINIO_ROOT_PASSWORD=rustfsadmin \
+            minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && break
+            sleep 1
+          done
+          AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin AWS_REGION=us-east-1 \
+            aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://whmcs || true
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start the stack and run Playwright
+        # CI is blanked for this step so playwright.config.ts
+        # (reuseExistingServer: !process.env.CI) reuses the frontend dev
+        # server that `make up` already started on :5173.
+        env:
+          CI: ""
+        run: |
+          make up
+          make test-frontend
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            frontend/test-results/
+            .e2e-logs/
+          if-no-files-found: ignore

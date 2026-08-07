@@ -1,0 +1,916 @@
+/*
+ * HostPanel — WHMCS "blend"-theme admin skin.
+ * Ported from the HostPanel.dc.html design (claude.ai/design). Every rule is
+ * scoped under `.hp-admin` (set on the admin layout root) so it never leaks
+ * into the client/public areas, which keep the Tailwind/Inter look.
+ *
+ * Palette (docs/DESIGN.md §2): navy #1A4D80 chrome, #337AB7 primary, #F6F6F6 body,
+ * #333 text, status green #46A546 / yellow #F89406 / red #C43C35 / gray #BFBFBF.
+ */
+
+.hp-admin {
+	--hp-navy: #1a4d80;
+	--hp-navy-hover: #15406f;
+	--hp-navy-border: #2e6396;
+	--hp-primary: #337ab7;
+	--hp-link: #337ab7;
+	--hp-side-link: #202f60;
+	--hp-body: #f6f6f6;
+	--hp-text: #333;
+	--hp-border: #ddd;
+	--hp-row-border: #ebebeb;
+
+	font-family: 'Open Sans', Helvetica, Arial, sans-serif;
+	font-size: 14px;
+	color: var(--hp-text);
+}
+
+.hp-admin *,
+.hp-admin *::before,
+.hp-admin *::after {
+	box-sizing: border-box;
+}
+
+.hp-admin a {
+	text-decoration: none;
+}
+
+/* ---------- shell ---------- */
+.hp-shell {
+	display: flex;
+	flex-direction: column;
+	min-height: 100vh;
+	background: #fff;
+}
+.hp-shell-body {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+}
+.hp-main {
+	flex: 1;
+	min-width: 0;
+	overflow-x: hidden;
+}
+.hp-content {
+	padding: 16px 22px 40px;
+}
+.hp-h1 {
+	font-size: 19.6px;
+	font-weight: 400;
+	color: #333;
+	margin: 6px 0 18px;
+}
+.hp-h2 {
+	font-size: 20px;
+	font-weight: 400;
+	color: #333;
+	margin: 0 0 10px;
+}
+.hp-lead {
+	color: #666;
+	line-height: 1.6;
+	margin: 0 0 14px;
+}
+
+/* ---------- navbar ---------- */
+.hp-nav {
+	flex: 0 0 auto;
+	height: 45px;
+	background: var(--hp-navy);
+	display: flex;
+	align-items: stretch;
+	color: #c9d6e2;
+	position: sticky;
+	top: 0;
+	z-index: 60;
+	box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
+}
+.hp-navlink {
+	display: flex;
+	align-items: center;
+	padding: 0 13px;
+	color: #dfe8ef;
+	cursor: pointer;
+	background: none;
+	border: none;
+	font: inherit;
+	font-size: 14px;
+}
+.hp-navlink:hover {
+	background: var(--hp-navy-hover);
+}
+.hp-brand {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 16px;
+	color: #fff;
+	cursor: pointer;
+	font-weight: 800;
+	letter-spacing: 0.5px;
+	font-size: 17px;
+}
+.hp-brand i {
+	font-size: 20px;
+}
+.hp-nav-spacer {
+	flex: 1;
+}
+.hp-nav-menu {
+	position: relative;
+	display: flex;
+}
+.hp-nav-menu > .hp-navlink {
+	font-size: 13px;
+	padding: 0 12px;
+}
+.hp-nav-menu.open > .hp-navlink {
+	background: var(--hp-navy-hover);
+}
+.hp-dropdown {
+	position: absolute;
+	top: 45px;
+	left: 0;
+	min-width: 210px;
+	background: #fff;
+	border: 1px solid #ccc;
+	border-top: 2px solid var(--hp-navy);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+	padding: 6px 0;
+	z-index: 70;
+}
+.hp-dropdown.right {
+	left: auto;
+	right: 0;
+}
+.hp-dditem {
+	display: block;
+	padding: 6px 16px;
+	color: #333;
+	font-size: 13px;
+	cursor: pointer;
+}
+.hp-dditem:hover {
+	background: #f2f6fa;
+}
+.hp-nav-scrim {
+	position: fixed;
+	inset: 45px 0 0 0;
+	z-index: 55;
+}
+.hp-updates {
+	color: #e8b84a !important;
+}
+.hp-hamburger {
+	display: none;
+}
+/* fa-bars' glyph sits high inside its own em-box (unlike fa-cogs/fa-user-circle),
+   so centering the box alone still reads as "too high" — nudge the glyph down. */
+.hp-hamburger i {
+	position: relative;
+	top: 2px;
+}
+
+/* ---------- sidebar ---------- */
+.hp-sidebar {
+	flex: 0 0 auto;
+	width: 206px;
+	background: #f2f2f2;
+	border-right: 1px solid #d5d5d5;
+	overflow-y: auto;
+	font-size: 12.5px;
+}
+.hp-sidebar-min {
+	flex: 0 0 auto;
+	width: 26px;
+	background: #efefef;
+	border-right: 1px solid #d5d5d5;
+	display: flex;
+	justify-content: center;
+	/* Without this, the container's default cross-axis "stretch" (it's a flex
+	   sibling of .hp-main inside .hp-shell-body, so it's stretched tall to
+	   match whatever the main content's height is) makes the single toggle
+	   button stretch to that same full height too, and centers its icon
+	   within that whole box — landing the "expand sidebar" arrow near the
+	   middle of the page instead of near the top. Pin it to the top instead;
+	   the gray rail itself still spans the full height via the stretch above. */
+	align-items: flex-start;
+	padding-top: 10px;
+}
+.hp-sidebar-min a {
+	cursor: pointer;
+	color: #666;
+}
+.hp-side-head {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 9px 12px 8px;
+	background: #e9e9e9;
+	border-bottom: 1px solid #dcdcdc;
+	color: #555;
+	font-weight: 700;
+	font-size: 12.5px;
+}
+.hp-side-head i {
+	color: #8a8a8a;
+	width: 14px;
+	text-align: center;
+}
+.hp-side-links {
+	padding: 8px 12px 10px;
+}
+.hp-slink {
+	display: block;
+	padding: 3px 0;
+	font-size: 14px;
+	color: var(--hp-side-link);
+	cursor: pointer;
+	text-decoration: underline;
+}
+.hp-slink:hover {
+	text-decoration: underline;
+	color: #111;
+}
+.hp-slink.sub {
+	padding-left: 12px;
+}
+.hp-slink.active {
+	color: #111;
+	font-weight: 700;
+	text-decoration: none;
+}
+.hp-slink.danger {
+	color: #c9302c;
+}
+.hp-side-body {
+	padding: 9px 12px;
+	color: #555;
+	line-height: 1.7;
+}
+.hp-side-minimise {
+	display: block;
+	text-align: center;
+	background: #5a5a5a;
+	color: #fff;
+	padding: 8px;
+	cursor: pointer;
+	font-size: 12px;
+	border: none;
+	width: 100%;
+}
+.hp-navmob {
+	display: none;
+}
+
+/* ---------- footer ---------- */
+.hp-foot {
+	flex: 0 0 auto;
+	background: var(--hp-navy);
+	color: #c9d6e2;
+	padding: 9px 22px;
+	display: flex;
+	justify-content: space-between;
+	font-size: 12px;
+}
+.hp-foot a {
+	color: #c9d6e2;
+	cursor: pointer;
+}
+.hp-foot a:hover {
+	text-decoration: underline;
+}
+
+/* ---------- panels ---------- */
+.hp-panel {
+	background: #fff;
+	border: 1px solid var(--hp-border);
+	border-radius: 4px;
+	box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+}
+.hp-panel-hd {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 12px;
+	border-bottom: 1px solid #eee;
+}
+.hp-panel-hd .title {
+	color: #555;
+	font-weight: 600;
+	font-size: 13px;
+}
+.hp-panel-hd .tools {
+	color: #bbb;
+	font-size: 12px;
+	display: flex;
+	gap: 9px;
+}
+
+/* ---------- tables ---------- */
+.hp-scroll {
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+}
+.hp-table {
+	width: 100%;
+	border-collapse: collapse;
+	background: #fff;
+	border: 1px solid var(--hp-border);
+}
+.hp-scroll > .hp-table {
+	min-width: 740px;
+}
+.hp-table thead tr {
+	background: var(--hp-navy);
+	color: #fff;
+}
+.hp-table th {
+	padding: 9px;
+	text-align: left;
+	font-size: 13px;
+	font-weight: 600;
+	border-right: 1px solid var(--hp-navy-border);
+}
+.hp-table th:last-child {
+	border-right: none;
+}
+.hp-table th.sortable {
+	cursor: pointer;
+}
+.hp-table th .hp-sort {
+	background: none;
+	border: none;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+	padding: 0;
+	width: 100%;
+	text-align: inherit;
+	white-space: nowrap;
+}
+.hp-table th.c,
+.hp-table td.c {
+	text-align: center;
+}
+.hp-table th.r,
+.hp-table td.r {
+	text-align: right;
+}
+.hp-table td {
+	padding: 7px 9px;
+	border-right: 1px solid #f5f5f5;
+	color: #444;
+}
+.hp-table td:last-child {
+	border-right: none;
+}
+.hp-table tbody tr {
+	border-bottom: 1px solid var(--hp-row-border);
+}
+.hp-row:hover {
+	background: #f5f9fc;
+}
+.hp-table a.cell-link,
+.hp-table td .cell-link {
+	color: var(--hp-link);
+	cursor: pointer;
+}
+.hp-table a.cell-link:hover {
+	text-decoration: underline;
+}
+.hp-group-row td {
+	background: #f0f0f0;
+	font-weight: 700;
+	color: #444;
+	padding: 9px 12px;
+}
+
+/* ---------- status ---------- */
+.hp-badge {
+	display: inline-block;
+	color: #fff;
+	font-size: 10px;
+	font-weight: 400;
+	padding: 1px 6px 2px;
+	border-radius: 3px;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+}
+.hp-badge.active {
+	background: #46a546;
+}
+.hp-badge.pending {
+	background: #f89406;
+}
+.hp-badge.suspended {
+	background: #0768b8;
+}
+.hp-badge.terminated {
+	background: #c43c35;
+}
+.hp-badge.cancelled,
+.hp-badge.inactive {
+	background: #bfbfbf;
+}
+.hp-badge.fraud {
+	background: #000;
+}
+.hp-stext {
+	font-weight: 600;
+}
+.hp-stext.green {
+	color: #43a047;
+}
+.hp-stext.red {
+	color: #d9534f;
+}
+.hp-stext.orange {
+	color: #e6a23c;
+}
+.hp-stext.gray {
+	color: #999;
+}
+
+/* ---------- buttons ---------- */
+.hp-btn {
+	background: #fff;
+	border: 1px solid #ccc;
+	border-radius: 3px;
+	padding: 7px 12px;
+	cursor: pointer;
+	color: #333;
+	font: inherit;
+	white-space: nowrap;
+}
+.hp-btn:hover {
+	filter: brightness(0.97);
+}
+.hp-btn:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+.hp-btn-primary {
+	background: var(--hp-primary);
+	border-color: var(--hp-primary);
+	color: #fff;
+}
+.hp-btn-blue {
+	background: #5b8fd6;
+	border-color: #5b8fd6;
+	color: #fff;
+}
+.hp-btn-green {
+	background: #5cb85c;
+	border-color: #5cb85c;
+	color: #fff;
+}
+.hp-btn-danger {
+	background: #d9534f;
+	border-color: #d9534f;
+	color: #fff;
+}
+.hp-btn i {
+	margin-right: 6px;
+}
+.hp-btn.icon-only i {
+	margin-right: 0;
+}
+
+/* ---------- forms ---------- */
+.hp-input,
+.hp-select,
+.hp-textarea {
+	width: 100%;
+	padding: 7px;
+	border: 1px solid #ccc;
+	border-radius: 3px;
+	font: inherit;
+	background: #fff;
+	color: #333;
+}
+.hp-textarea {
+	resize: vertical;
+}
+.hp-admin input:focus,
+.hp-admin select:focus,
+.hp-admin textarea:focus {
+	outline: none;
+	border-color: #66afe9;
+	box-shadow:
+		inset 0 1px 1px rgba(0, 0, 0, 0.075),
+		0 0 6px rgba(102, 175, 233, 0.4);
+}
+.hp-field-label {
+	font-size: 12px;
+	color: #666;
+	margin-bottom: 4px;
+}
+.hp-formrow {
+	display: flex;
+	align-items: center;
+	padding: 9px 0;
+	gap: 16px;
+}
+.hp-formrow.top {
+	align-items: flex-start;
+}
+.hp-formrow > label {
+	width: 280px;
+	text-align: right;
+	color: #555;
+	flex: 0 0 auto;
+}
+.hp-help {
+	color: var(--hp-primary);
+	font-size: 12px;
+}
+.hp-filter {
+	background: #f5f5f5;
+	border: 1px solid #e2e2e2;
+	border-radius: 4px;
+	padding: 14px 16px;
+	display: flex;
+	gap: 14px;
+	align-items: flex-end;
+	margin-bottom: 16px;
+}
+.hp-filter .grow {
+	flex: 1;
+}
+
+/* ---------- settings tabs ---------- */
+.hp-tabs {
+	display: flex;
+	gap: 2px;
+	border-bottom: 1px solid #ddd;
+	flex-wrap: wrap;
+}
+.hp-tab {
+	padding: 9px 14px;
+	cursor: pointer;
+	font-size: 13px;
+	color: #337ab7;
+	background: none;
+	border: 1px solid transparent;
+	border-bottom: none;
+	margin-bottom: -1px;
+	border-radius: 3px 3px 0 0;
+	font: inherit;
+}
+.hp-tab.active {
+	color: #333;
+	background: #fbfbfb;
+	font-weight: 600;
+	border-color: #ddd;
+	border-bottom-color: #fbfbfb;
+}
+.hp-tabpanel {
+	border: 1px solid #ddd;
+	border-top: none;
+	background: #fbfbfb;
+	padding: 22px;
+}
+.hp-form-actions {
+	display: flex;
+	justify-content: center;
+	gap: 10px;
+	margin-top: 20px;
+}
+.hp-formrow .hp-field {
+	flex: 0 0 340px;
+	max-width: 100%;
+}
+.hp-checkline {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 9px 0;
+	color: #555;
+}
+@media (max-width: 640px) {
+	.hp-formrow {
+		flex-direction: column;
+		align-items: stretch !important;
+		gap: 4px;
+	}
+	.hp-formrow > label {
+		width: auto !important;
+		text-align: left !important;
+	}
+	.hp-formrow .hp-field {
+		flex: 1 1 auto;
+	}
+}
+
+/* ---------- dashboard stat cards ---------- */
+.hp-grid4 {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 16px;
+	margin-bottom: 16px;
+}
+.hp-stat {
+	display: flex;
+	border-radius: 3px;
+	overflow: hidden;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+	color: #fff;
+}
+.hp-stat-ico {
+	width: 70px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 30px;
+	background: rgba(0, 0, 0, 0.08);
+	align-self: stretch;
+}
+.hp-stat-bd {
+	padding: 12px 14px;
+}
+.hp-stat-val {
+	font-size: 30px;
+	font-weight: 700;
+	line-height: 1;
+}
+.hp-stat-lbl {
+	font-size: 13px;
+	opacity: 0.95;
+	margin-top: 3px;
+}
+.hp-main2 {
+	display: grid;
+	grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+	gap: 16px;
+	align-items: start;
+}
+.hp-col {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	min-width: 0; /* don't let a wide child (e.g. a .hp-scroll table) force this column wider than its track */
+}
+
+/* ---------- pagination + bulk ---------- */
+.hp-pager {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 20px;
+	flex-wrap: wrap;
+}
+.hp-pager-nav {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.hp-pager span,
+.hp-pager a,
+.hp-pager button {
+	border: 1px solid #ddd;
+	padding: 7px 14px;
+	border-radius: 3px;
+	color: #555;
+	background: #fff;
+	cursor: pointer;
+	font: inherit;
+}
+.hp-pager .muted {
+	color: #999;
+	background: #f7f7f7;
+	cursor: default;
+}
+.hp-pager .cur {
+	border-color: var(--hp-navy);
+	background: var(--hp-navy);
+	color: #fff;
+	cursor: default;
+}
+.hp-pager-size {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: #555;
+	white-space: nowrap;
+}
+.hp-pager-size select.hp-select {
+	width: auto;
+}
+.hp-bulk {
+	margin-top: 14px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.hp-bulk > span {
+	color: #555;
+	margin-right: 4px;
+}
+.hp-listbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 8px;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.hp-count {
+	color: #555;
+}
+
+/* ---------- info banner ---------- */
+.hp-info {
+	background: #e8f2fb;
+	border: 1px solid #cfe3f5;
+	border-radius: 4px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+	color: #31708f;
+}
+.hp-alert-yellow {
+	background: #fcf8e3;
+	border: 1px solid #faebcc;
+	border-radius: 4px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+	color: #8a6d3b;
+}
+.hp-alert-red {
+	background: #f2dede;
+	border: 1px solid #ebccd1;
+	border-radius: 4px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+	color: #a94442;
+}
+.hp-alert-green {
+	background: #dff0d8;
+	border: 1px solid #d6e9c6;
+	border-radius: 4px;
+	padding: 12px 14px;
+	margin-bottom: 14px;
+	color: #3c763d;
+}
+.hp-input-error {
+	border-color: #d9534f !important;
+}
+.hp-counterbar {
+	background: #f7f7f7;
+	border: 1px solid #e2e2e2;
+	border-radius: 4px;
+	text-align: center;
+	padding: 14px;
+	margin-bottom: 14px;
+	font-size: 15px;
+	color: #333;
+}
+
+/* ---------- password gate ---------- */
+.hp-gate-wrap {
+	display: flex;
+	justify-content: center;
+	padding: 60px 16px;
+}
+.hp-gate {
+	width: 100%;
+	max-width: 360px;
+	background: #fff;
+	border: 1px solid var(--hp-border);
+	border-radius: 4px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+	padding: 26px 24px;
+	text-align: center;
+}
+.hp-gate-icon {
+	font-size: 30px;
+	color: var(--hp-navy);
+	margin-bottom: 10px;
+}
+.hp-gate h2 {
+	font-size: 16px;
+	font-weight: 600;
+	color: #333;
+	margin: 0 0 6px;
+}
+.hp-gate p {
+	color: #666;
+	font-size: 13px;
+	margin: 0 0 16px;
+}
+.hp-gate .hp-input {
+	margin-bottom: 12px;
+	text-align: center;
+}
+.hp-gate .hp-btn-primary {
+	width: 100%;
+}
+
+/* ---------- toast ---------- */
+.hp-toast {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: #43a047;
+	color: #fff;
+	padding: 11px 22px;
+	border-radius: 4px;
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+	z-index: 95;
+	font-weight: 600;
+}
+.hp-toast.error {
+	background: #d9534f;
+}
+
+/* ---------- scrollbars ---------- */
+.hp-admin ::-webkit-scrollbar {
+	width: 11px;
+	height: 11px;
+}
+.hp-admin ::-webkit-scrollbar-thumb {
+	background: #c1c1c1;
+	border-radius: 6px;
+	border: 2px solid #f0f0f0;
+}
+.hp-admin ::-webkit-scrollbar-track {
+	background: #f0f0f0;
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 860px) {
+	.hp-navdesk {
+		display: none !important;
+	}
+	.hp-hamburger {
+		display: flex !important;
+	}
+	.hp-navmob {
+		display: block !important;
+	}
+	.hp-sidebar {
+		position: fixed !important;
+		top: 45px;
+		left: 0;
+		bottom: 0;
+		z-index: 82;
+		width: 260px !important;
+		transform: translateX(-100%);
+		transition: transform 0.25s ease;
+		box-shadow: 2px 0 16px rgba(0, 0, 0, 0.25);
+	}
+	.hp-sidebar.open {
+		transform: translateX(0);
+	}
+	.hp-drawer-scrim {
+		position: fixed;
+		inset: 45px 0 0 0;
+		background: rgba(0, 0, 0, 0.4);
+		z-index: 81;
+	}
+	.hp-content {
+		padding: 14px 12px 44px !important;
+	}
+	.hp-h1 {
+		font-size: 22px !important;
+	}
+	.hp-grid4 {
+		grid-template-columns: repeat(2, 1fr) !important;
+	}
+	.hp-main2 {
+		/* minmax(0, 1fr), not plain 1fr: a bare 1fr grid track still sizes to
+		   its content's min-content width, and a wide table inside (e.g.
+		   .hp-scroll > .hp-table's min-width: 740px) would blow the whole
+		   column — and therefore the page — out to that width on narrow
+		   viewports instead of actually stacking to one column. */
+		grid-template-columns: minmax(0, 1fr) !important;
+	}
+	.hp-filter {
+		flex-wrap: wrap !important;
+	}
+	.hp-filter > div {
+		flex: 1 1 45% !important;
+	}
+	.hp-filter > button {
+		flex: 1 1 45% !important;
+		justify-content: center;
+	}
+}
+@media (max-width: 560px) {
+	.hp-grid4 {
+		grid-template-columns: 1fr !important;
+	}
+	.hp-foot {
+		flex-direction: column;
+		gap: 4px;
+		text-align: center;
+	}
+	.hp-filter > div,
+	.hp-filter > button {
+		flex: 1 1 100% !important;
+	}
+}

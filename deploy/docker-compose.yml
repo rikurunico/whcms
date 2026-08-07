@@ -1,0 +1,238 @@
+# WHCMS — full local/staging stack (dev-friendly).
+#
+# Run from the repo root:
+#   docker compose -f deploy/docker-compose.yml up -d --build          # core stack
+#   docker compose -f deploy/docker-compose.yml --profile dev up -d    # + mockserver
+#
+# Build contexts are the repository root ("..") so the Dockerfiles in deploy/
+# can COPY backend/, frontend/ and mockserver/.
+#
+# Secrets: every sensitive value can be overridden via the host environment or
+# an .env file next to this compose file. The baked-in defaults are for LOCAL
+# DEV ONLY — never reuse them in staging/production.
+
+name: whcms
+
+# Shared backend environment (api + worker) — mirrors CONTRACTS.md §11.
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-development}
+  APP_PORT: "8080"
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+  JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+  # base64-encoded 32-byte key (AES-256-GCM). Dev default below; generate your
+  # own with: openssl rand -base64 32
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-ZGV2LWVuY3J5cHRpb24ta2V5LTAxMjM0NTY3ODlhYmM=}
+  DATABASE_URL: postgres://root:postgres@postgres:5432/whmcs?sslmode=disable
+  REDIS_ADDR: redis:6379
+  REDIS_PASSWORD: ""
+  REDIS_DB: "0"
+  RUSTFS_ENDPOINT: http://rustfs:9000
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+  RUSTFS_BUCKET: whmcs
+  RUSTFS_USE_SSL: "false"
+  # Duitku — defaults target the mockserver (profile "dev"), which validates
+  # real MD5 signatures using its own DUITKU_MERCHANT_CODE=DEMO /
+  # DUITKU_API_KEY=secretkey (kept in sync via the same ${...} defaults below).
+  DUITKU_MERCHANT_CODE: ${DUITKU_MERCHANT_CODE:-DEMO}
+  DUITKU_API_KEY: ${DUITKU_API_KEY:-secretkey}
+  DUITKU_ENV: ${DUITKU_ENV:-sandbox}
+  DUITKU_BASE_URL: ${DUITKU_BASE_URL:-http://mockserver:9090}
+  RDASH_RESELLER_ID: ${RDASH_RESELLER_ID:-}
+  RDASH_API_KEY: ${RDASH_API_KEY:-}
+  RDASH_BASE_URL: ${RDASH_BASE_URL:-http://mockserver:9090/v1}
+  # Cloudflare Turnstile CAPTCHA (optional; toggled via Admin → Settings →
+  # Security). Secret key is ENV-only. The dev default is Cloudflare's
+  # "always passes" test secret pointed at the mockserver siteverify mock, so
+  # enabling CAPTCHA works offline. In production set your real secret and
+  # leave TURNSTILE_VERIFY_URL unset (Cloudflare's endpoint is the default).
+  TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-1x0000000000000000000000000000000AA}
+  TURNSTILE_VERIFY_URL: ${TURNSTILE_VERIFY_URL:-http://mockserver:9090/turnstile/v0/siteverify}
+  # Mail: "http" posts JSON to MAIL_HTTP_URL (mockserver capture); other
+  # drivers: smtp | log.
+  MAIL_DRIVER: ${MAIL_DRIVER:-http}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  SMTP_ENCRYPTION: ${SMTP_ENCRYPTION:-auto}
+  SMTP_AUTH: ${SMTP_AUTH:-auto}
+  SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-20}
+  SMTP_INSECURE_SKIP_VERIFY: ${SMTP_INSECURE_SKIP_VERIFY:-false}
+  MAIL_HTTP_URL: ${MAIL_HTTP_URL:-http://mockserver:9090/mail/send}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
+  ADMIN_ALERT_EMAIL: ${ADMIN_ALERT_EMAIL:-admin@example.com}
+  ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
+  # Where the installation wizard's bootstrap phase persists a config it
+  # collected through the web form (docs/CONTRACTS.md §15). Every var above
+  # already has a dev default, so that phase never actually triggers in this
+  # compose file — this only matters if you deliberately blank one out.
+  ENV_FILE: /data/app.env
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: whmcs
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Uncomment to reach Postgres from the host. Left unpublished by default
+    # because local dev machines often already run Postgres on 5432.
+    # ports:
+    #   - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d whmcs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Optional persistence (PRD §14.2): AOF keeps the asynq queue across restarts.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    # Uncomment to reach Redis from the host (see Postgres note above).
+    # ports:
+    #   - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # RustFS — S3-compatible object storage for ALL file storage (invoice PDFs,
+  # ticket attachments, logo). NOTE: image/healthcheck specifics of
+  # rustfs/rustfs:latest may drift; if the container never turns healthy
+  # (no curl/wget in image, or a different health path), either fix the test
+  # below or switch api/worker depends_on to `condition: service_started`.
+  # Drop-in S3 alternative (commented):
+  #   image: minio/minio:latest
+  #   command: ["server", "/data", "--console-address", ":9001"]
+  #   environment:
+  #     MINIO_ROOT_USER: rustfsadmin
+  #     MINIO_ROOT_PASSWORD: rustfsadmin
+  #   healthcheck:
+  #     test: ["CMD", "mc", "ready", "local"]
+  rustfs:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+    volumes:
+      - rustfsdata:/data
+    ports:
+      # Published so presigned URLs / manual S3 inspection work from the host.
+      # Override RUSTFS_HOST_PORT if a local RustFS already occupies 9000.
+      - "${RUSTFS_HOST_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || wget -q -O /dev/null http://localhost:9000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: whcms/backend:${TAG:-dev}
+    restart: unless-stopped
+    command: ["/app/api"]
+    environment: *backend-env
+    volumes:
+      - whcms_config:/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: whcms/backend:${TAG:-dev}
+    restart: unless-stopped
+    command: ["/app/worker"]
+    environment: *backend-env
+    volumes:
+      - whcms_config:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      # Migrations run on API startup; the worker waits for a healthy API so
+      # it never sees a half-migrated schema.
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    image: whcms/frontend:${TAG:-dev}
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      # adapter-node caps request bodies at 512KB by default — raise it so
+      # ticket attachments survive the BFF proxy.
+      BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-25M}
+      # Server-side base URL of the Go API (BFF pattern, CONTRACTS.md §13).
+      API_URL: http://api:8080
+      PUBLIC_APP_NAME: ${PUBLIC_APP_NAME:-WHCMS}
+      ORIGIN: ${ORIGIN:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # Dev/E2E only: mock Duitku / WHM / DirectAdmin / RDash / mail capture.
+  # Enable with: --profile dev
+  mockserver:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.mockserver
+    image: whcms/mockserver:${TAG:-dev}
+    restart: unless-stopped
+    profiles: ["dev"]
+    environment:
+      MOCK_PORT: "9090"
+      # Must match the backend's DUITKU_MERCHANT_CODE / DUITKU_API_KEY
+      # (same ${...} defaults as x-backend-env, so they stay in sync).
+      DUITKU_MERCHANT_CODE: ${DUITKU_MERCHANT_CODE:-DEMO}
+      DUITKU_API_KEY: ${DUITKU_API_KEY:-secretkey}
+    ports:
+      - "9090:9090"
+
+volumes:
+  pgdata:
+  redisdata:
+  rustfsdata:
+  whcms_config:

@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+#
+# WHCMS mockserver image — mock Duitku / WHM / DirectAdmin / RDash /
+# mail-capture (Go module "github.com/tsdlamongan/whcms/mockserver", listens on :9090).
+# Dev & E2E only — never deployed to production.
+#
+# Build context MUST be the repository root:
+#   docker build -f deploy/Dockerfile.mockserver -t whcms/mockserver .
+
+# ---------- build stage ----------
+FROM golang:1.26-alpine AS build
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+
+COPY mockserver/go.mod mockserver/go.sum* ./
+RUN go mod download
+
+COPY mockserver/ ./
+
+# main package lives at the module root (main.go).
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags="-s -w" -o /out/mockserver .
+
+# ---------- final stage ----------
+FROM alpine:3.22
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S mock && adduser -S -G mock mock
+
+WORKDIR /app
+
+COPY --from=build /out/mockserver /app/mockserver
+
+USER mock
+
+EXPOSE 9090
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=6 \
+    CMD wget -q -O /dev/null http://localhost:9090/mail/messages || exit 1
+
+CMD ["/app/mockserver"]

@@ -1,0 +1,104 @@
+# API Reconciliation — Frontend expectations vs backend handlers
+
+> A living log of the request/response shapes the frontend implements against, with dated
+> fix notes wherever the two sides turned out to disagree. Frontend loaders are written
+> DEFENSIVELY (tolerate flat/nested, snake/camel, missing optional fields) but the E2E suite
+> exercises the happy paths below. When an endpoint's shape changes on either side, update
+> its entry here in the same change. Envelope always `{data, meta, error}`.
+
+## Request/response shapes the frontend implements against
+
+### auth
+- POST /auth/register body `{email, password, first_name, last_name, company?, address1, city, postcode, country, phone}`; 409 CONFLICT = email exists. No auto-login.
+- POST /auth/resend-verification `{email}`; /auth/verify-email `{token}`; /auth/forgot-password `{email}` (always 200); /auth/reset-password `{token, password}`.
+- PATCH /auth/me password change `{current_password, new_password}`.
+- POST /auth/2fa/setup → `{secret, otpauth_url}`; enable/disable `{totp_code}` (+password on disable OK).
+- GET /auth/me → must expose `email_verified_at` (cart gates checkout on it) + role + client profile (flat or nested `client`).
+  **FIXED (E2E auth-and-rbac.spec.ts)**: real backend shape is `{user: UserDTO, client: Client|null}` — NOT flattened.
+  `frontend/src/hooks.server.ts`'s `MeResponse`/`toSessionUser` assumed a flat `{id,email,role,client_id,...}` on
+  `data` directly, so `locals.user.role` was always `undefined` on every SSR request after login (login itself
+  redirects correctly since it reads the flat `AuthResponse.user` from POST /auth/login, a genuinely different,
+  correctly-flat shape) — this silently broke the `(admin)` layout's admin/staff role guard for every session
+  (staff/admin landed on `/dashboard` instead of `/admin`) and made the topbar's displayed name fall back to an
+  empty string. Fixed by reading `data.user.*` and `data.client.first_name/last_name` in `hooks.server.ts`.
+
+### catalog (public)
+- GET /products & /products/:slug → embed `pricing: [{cycle, price, setup_fee}]`; detail embeds `option_groups: [{id,name,options:[{id,name,values:[{id,name,price_deltas:{cycle:delta}}]}]}]`.
+- POST /coupons/validate `{code}` → Coupon entity (applies_to array|{products:[]}|null tolerated).
+
+### orders
+- POST /orders `{items:[{item_type: product|domain_register|domain_transfer, product_id?, domain?, cycle, options?:{optionId:valueId}, epp_code?}], coupon?: code}` → res `{order:{id}, invoice:{id}}` (fallback `invoice_id` read too). FE redirects to /billing/invoices/<invoice id>.
+
+### client area
+- GET/POST/PATCH/DELETE /account/contacts (+`permissions:{invoices,services,domains,tickets}` map; entities.ClientContact has JSONB permissions — serve it).
+- GET /account/credit → `{balance, ledger:[...]}` (or plain array tolerated; balance fallback client.credit_balance).
+- GET /transactions (client history, paginated) — **not in §9, FE needs it** (fe-client-billing).
+- GET /services rows + `product_name`; detail optionally `server_hostname`, `renewal_invoice_id`; GET /services/:id/sso → `{url}`; POST /services/:id/upgrade `{product_id, cycle}` → `{invoice_id}` (or invoice.id / pending_upgrade.invoice_id).
+  **STILL OPEN (E2E renewal-unsuspend.spec.ts, flow-5)**: `renewal_invoice_id` is never populated anywhere in
+  `backend/internal` (confirmed by grep — zero occurrences outside the frontend), so the client service-detail
+  page's renewal-invoice banner/link (`(client)/services/[id]/+page.svelte`, `data-testid=service-renewal-invoice-link`)
+  is permanently dead code. Not fixed as part of E2E since a correct fix needs a moderate, cross-cutting change to
+  provisioning's `GetService`/`ListServices` (querying billing's InvoiceStore for an open `service_renewal` item)
+  touching a page flows 4 and 7 also exercise — left for a follow-up, not blocking any of the 8 critical flows.
+- Domains: GET /domains/:id/contact → RegistrantContact (ports.go tags); POST /domains/:id/renew `{years}` → `invoice_id`; GET dns → array | `{records:[]}`; GET epp → `{epp_code}`; PATCH /domains/:id `{auto_renew}`.
+- Invoices: GET /invoices/:id flat invoice or `{invoice, items, transactions}`; POST /invoices/:id/pay `{method}` → `{payment_url?, va_number?, qr_string?, bank_accounts?, note?, reference, amount, expires_at?}` (bank_accounts/note only for `method:"bank_transfer"`, the manual gateway — no payment_url/va_number/qr_string in that case); GET /payments/return?merchantOrderId= → `{invoice_id, status}`; PDF = byte stream OR `{url}` presigned (proxy handles both).
+  **FIXED (E2E flow-2)**: backend's `GET /payments/return` handler literally did an HTTP 302 redirect to `FRONTEND_URL/billing/invoices/<id>?paid=<status>` instead of returning this JSON — dead-code behavior anyway, since the gateway's own `returnUrl` is configured to point straight at the FRONTEND's `/payments/return` page (payments/service.go `payWithGateway`), never at this backend endpoint via browser redirect. Added `Service.ResolveReturnInfo` + `ReturnInfo{invoice_id, status}` (status = the INVOICE's own status, e.g. `"paid"`, not the transaction's `"success"`) and changed `Handler.Return` to return it via `httpx.OK` — matches this doc's contract and what the frontend already implemented against. Old `ResolveReturn`/redirect kept as a harmless now-unused method (its own unit tests still pass unchanged).
+- Tickets: GET /tickets/:id flat+`replies[]` or `{ticket, replies}`; create/reply multipart fields `department_id, subject, priority, message` + repeated `attachments`; ~~GET /tickets/:id/attachments?key=&filename=~~ **FIXED (E2E flow-6, 2026-07-03)**: real backend route is `GET /tickets/:id/attachments/:idx` (idx = position over the visible thread's attachments, per each reply's `AttachmentView.index` — there is no `object_key` exposed to clients/staff, only `index`) → 302/303 redirect ke presigned URL. Client-side frontend (`(client)/support/[id]/types.ts`, `+page.server.ts`, `+page.svelte`, and the attachments proxy route moved to `[id]/attachments/[idx]/+server.ts`) updated to match. Admin-side (`(admin)/admin/tickets/*`) had the same `object_key`-based mismatch — **FIXED (2026-07-03)**: `(admin)/admin/tickets/types.ts` `TicketAttachment`/`parseAttachments` switched to `index`-based, `[id]/+page.svelte` now links via `attachmentHref(att)` (path-segment `idx`), and the proxy route moved to `[id]/attachments/[idx]/+server.ts` to match the real `GET /admin/tickets/:id/attachments/:idx` route.
+
+### admin
+- POST /admin/clients/:id/impersonate → `{access_token, refresh_token}`; GET /admin/clients/export.csv (stream); POST /admin/clients/:id/credit `{delta signed, reason}`; /admin/clients/:id/contacts CRUD.
+- GET /admin/dashboard → `{income_today, income_month, orders_today, unpaid_count, unpaid_total, overdue_count, overdue_total, open_tickets, active_services, pending_provisioning, recent_orders:[{id,order_number,client_id,client_name?,status,total,created_at}], recent_tickets:[{id,ticket_number,subject,status,priority}]}`.
+  **MISMATCH with the adminops module as first built** (DashboardStats+ExtraStats+recent audit activity) — resolved at wiring by adding recent_orders/recent_tickets to the adminops repo/DTO (FE is optional-tolerant but E2E needs recent_orders).
+- `?client_id=` filter on the admin services/domains/invoices/tickets lists (used by the client-detail tabs).
+- Admin invoices: POST /admin/invoices `{client_id, due_date, notes, items:[{description,amount,taxed}]}`; PATCH :id `{due_date, notes}`; POST :id/payments `{amount, method}`; POST :id/refund `{reason}`; POST :id/cancel; POST/DELETE :id/items (draft); GET :id embeds `items`; GET :id/pdf.
+- GET /admin/transactions (list w/ filters status/gateway/search/date/invoice_id) — **not in §9, the frontend needs it**.
+- Reports: GET /admin/reports/revenue → `{total, transaction_count, series:[{period, amount, count}], by_gateway:[{gateway, amount, count}]}`; orders → `{total_orders, total_value, by_status[], series[]}`; services → `{total, by_status[], by_product:[{product_id,product_name,count}]}`. (adminops implements these + format=csv; the FE also builds its own CSV via proxy — both fine, match the field names.)
+  **FIXED (E2E admin-ops.spec.ts, flow-7)**: the real `adminops.RevenueReportData` Go struct actually returns
+  `{points, total_amount, total_count, by_gateway}` — NOT `{series, total, transaction_count}` as guessed above.
+  Only `by_gateway` happened to match by coincidence. `frontend/src/routes/(admin)/admin/reports/revenue/+page.server.ts`
+  was reading the guessed names, so the page rendered a correct per-gateway split next to a bogus "Rp 0 / 0
+  transactions" total and an empty totals table. Fixed the loader to read `points`/`total_amount`/`total_count`
+  while keeping the page component's own prop names (`series`/`total`/`txCount`) unchanged.
+- Gateways: FE GET /admin/gateways → ARRAY `[{name:'duitku', active, merchant_code, mode, api_key_set}]`, FE PUT /admin/gateways/duitku `{merchant_code, mode, active}`. adminops module: GET/PUT /admin/gateways (single). **Reconcile** (either the backend serves both shapes, or the FE follows the single shape — decided below).
+  **FIXED (2026-07-12)**: PUT was hitting the nonexistent `/admin/gateways/duitku` sub-route (real route is `PUT /admin/gateways`, no name suffix) — every gateway config save silently 404'd. There is also no `active` field anywhere in `GatewaysConfig`/`UpdateGatewaysInput` (adminops only ever supported merchant_code+mode; "active" was never a real backend concept for the single Duitku gateway). Fixed the FE loader/action to the real `{duitku:{merchant_code,mode,api_key_set}}` shape and PUT body `{merchant_code,mode}`; replaced the fake "Gateway Active" checkbox with a `configured` badge derived from `merchant_code !== ''`.
+  **UPDATED (payment gateway modularity pass)**: `GatewaysConfig`/`GET /admin/gateways` gained `base_url` on the `duitku` key (live "custom endpoint" override, same idea as `registrars.base_url`) and a new `manual` key (`{enabled, accounts: [{bank_name,account_number,account_holder}], instructions}`). Unlike Duitku's `PUT /admin/gateways` (still the single flat shape above, untouched), the manual gateway now DOES have its own real sub-route — `PUT /admin/gateways/manual` — driven by a second named SvelteKit form action on the same page (this repo's established pattern for multi-panel admin pages, e.g. `(admin)/admin/settings`).
+- Services admin: PATCH /admin/services/:id `{next_due_date, notes}`; change-package `{product_id}`; lifecycle POSTs per §9.
+- Servers: POST /admin/servers, PATCH|DELETE /admin/servers/:id; test-connection → `{ok, message, version?, hostname?, nameservers?}`; server-groups CRUD serupa; rows + `accounts_count`.
+  **FIXED (2026-07-17)**: test-connection used to probe `AccountInfo` (WHM `accountsummary?user=<username>`) against the server's login username, so a freshly-added WHM server always failed with `NOT_FOUND: cpanel account not found`. Now `ServerModule.TestConnection` runs a read-only connectivity probe that needs no account (cpanel `version` + best-effort `gethostname`/`get_nameserver_config`, falling back to `nvget nameserver[2-4]`; DA `CMD_API_SHOW_USERS`). Nameserver auto-fill is empty for a reseller token that inherits nameservers from root (WHM exposes no reseller-readable API for root's defaults — use a root WHM token or set the reseller's own nameservers). The cpanel adapter also used to send whatever credential it had as a `whm user:<cred>` token, so **username+password logins 403'd** (WHM's `whm` scheme only accepts API tokens); it now picks the scheme by credential — API token → `whm user:token`, password → HTTP Basic auth `base64(user:password)` — matching WHMCS, which accepts either. Added a pre-save endpoint `POST /admin/servers/test-connection` (body `{module,hostname,port,username,password?,api_token?,use_ssl,id?}`, `id>0` fills blank secrets from the stored row) so "Test Connection" works on the Add-Server form before saving, WHMCS-style, and the reported nameservers auto-fill blank NS fields. The old `POST /admin/servers/:id/test-connection` still probes a saved server. `TestConnectionResult` dropped `info`, gained `version/hostname/nameservers`.
+- Registrars: PATCH /admin/registrars/:id `{active, config}`; POST /admin/registrars/:id/test → `{success, message}`; rows + `api_key_present`.
+  **FIXED (2026-07-12)**: the real route is `PUT /admin/registrars/:id`, not PATCH — FE was using PATCH, so every registrar save 405'd. Also the test-connection response field is `{ok, message}` (`domains.TestRegistrarResponse`), not `{success, message}` — FE was reading `success` (always `undefined`), so a failed connectivity test (`ok:false`) was silently reported as a pass. Fixed both the method and the field name. The identical `{ok,message}` vs `{success,message}` bug was also found and fixed in the servers test-connection action (`provisioning.TestConnectionResult` was `{ok, message, info?}`; now `{ok, message, version?, hostname?, nameservers?}` — see the servers entry above) — both `admin/servers/+page.server.ts` and `admin/servers/[id]/+page.server.ts`.
+- Domains admin: PATCH /admin/domains/:id `{status?, auto_renew?, nameservers?}`; renew → `{invoice_id?}`; sync POST.
+- Catalog admin: GET/PUT /admin/products/:id/pricing (`{pricing:[{cycle,price,setup_fee}]}` full-set replace); configurable options GLOBAL tree CRUD (`/admin/configurable-option-groups[/:id]/options`, `/admin/configurable-options/:id/values`, etc. as first guessed by fe-admin-catalog); update verb PATCH; create returns entity (needs `data.id`).
+  **FIXED (2026-07-12)**: none of the `/admin/configurable-option-groups*` / `/admin/configurable-options*` / `/admin/configurable-option-values*` paths above ever existed — the real mount is `/admin/config-options` (`catalog/handler.go`): `GET /admin/config-options` returns the WHOLE tree in one call (`[{group, options:[{option, values:[]}]}]`), `POST/PATCH/DELETE /admin/config-options/groups[/:id]`, `POST/PATCH/DELETE /admin/config-options/groups/:id/options` and `/admin/config-options/options[/:id]`, `POST/PATCH/DELETE /admin/config-options/options/:id/values` and `/admin/config-options/values[/:id]`. The product-edit options tab 404'd on load and every option/value CRUD action 404'd. Fixed `products/[id]/+page.server.ts` to fetch the tree once and to hit every `config-options` route above.
+  **FIXED (E2E admin-ops.spec.ts, flow-7)**: the real endpoint is `PUT /admin/products/:id/pricing` accepting
+  ONE billing-cycle price per call (`{cycle, price, setup_fee}` per `catalog.PricingInput`) — there is no bulk
+  `{pricing:[...]}` full-set-replace body/endpoint. Every product creation with pricing was silently failing to
+  save pricing and redirecting to `?pricing_error=1`. Fixed by adding
+  `frontend/src/routes/(admin)/admin/products/pricing-sync.server.ts`, a shared server-only helper that upserts
+  each enabled cycle individually via the real endpoint and DELETEs any cycle removed on edit, wired into both
+  the product `new` and `[id]` edit `+page.server.ts` actions.
+- Staff/logs/settings/email-templates/departments: served by adminops + the notifications email-template routes; endpoint set per FRONTEND.md §2 FE-ADMIN-SUPPORT.
+
+## 2026-07-12 — PRD feature-audit follow-up fixes
+
+A full audit against PRD.md's 114 FRs turned up further FE↔BE contract breaks beyond the ones already annotated above. All fixed together, with backend tests added for every new/changed endpoint:
+
+- **Client transaction history** (line 34, "not in §9, FE needs it"): backend never actually had `GET /transactions` — added it (`payments.ListMyTransactions` → new `TransactionRepo.ListForClient(clientID, ...)`, join through `invoices.client_id` since `transactions` carries no client_id itself). The FE call was already correct; only the backend route was missing.
+- **Admin invoice PDF**: FE proxy called `GET /admin/invoices/:id/pdf`, which billing's handler never registered (only the client-scoped `/invoices/:id/pdf` existed) → 404. Added `AdminInvoicePDF` reusing `DownloadPDF(ctx, 0, invoiceID)` (clientID=0 bypasses ownership, same pattern as `AdminGetInvoice`).
+- **Admin record payment**: FE posted `/admin/invoices/:id/payments` (plural); real route is `/:id/payment` (singular). Fixed FE. (`admin-ops.spec.ts` happened to pass because it drives the API directly, not the UI action — masked the bug.)
+- **Domain registrant contact read-back** (line 42): `GET /domains/:id/contact` never existed backend-side (FE rendered on 404 with a "RESTful guess" comment); only the PATCH write path worked. Added `DomainService.GetContact` (live registrar fetch via `RegistrarModule.GetContact`, active-domain guard mirroring `GetEPP`) + the route.
+- **Resend verification email** (line 12): the endpoint was `RequireAuth()`-gated and read the user from the token, ignoring the `{email}` body — so the pre-login resend flow on `/register` and `/verify-email` (no session yet) always 401'd; only the logged-in cart-page resend happened to work. Made the route public + rate-limited, changed `ResendVerification(ctx, userID)` → `ResendVerification(ctx, email)`, matching `ForgotPassword`'s exact anti-enumeration posture (always 200, silently no-ops for unknown/already-verified/error cases).
+- **Email templates admin edit**: FE addressed templates by numeric `id`; the real routes key on `:key/:locale` (`GET/DELETE /admin/email-templates/:key/:locale`, `PUT /admin/email-templates/` with `{key,locale,...}` in the body) and there is no ad-hoc-content preview (`Preview` only renders the STORED template). Restructured the route from `email-templates/[id]/` to `email-templates/[key]/[locale]/`; preview now reflects the last-saved version (copy updated accordingly). Also fixed the email-log retry action: it posted to `/admin/logs/email/:id/retry` (that path is the read-only adminops log viewer) instead of the real `/admin/email-log/:id/retry` (notifications module).
+- **Client CSV export**: FE proxy fetched `/admin/clients/export.csv`; real route is `/admin/clients/export` (no extension) registered before `/:id` — the `.csv` suffix was matching the `/:id` route and 400ing on `parseParamID`. Fixed the proxy path.
+- **Admin service PATCH**: FE's "update" action (next_due_date/notes) PATCHed `/admin/services/:id`, which provisioning never registered (only GET + action sub-routes). Added `AdminUpdateService` (service + handler + route).
+- **Internal client-note leak (security)**: `GET/PATCH /account/profile` serialized `domain.Client` verbatim, including `notes_admin` — a client could read their own admin-only internal note via the API (the UI just didn't display it). Added a `redactAdminNotes` step in the `clients` handler before both responses.
+
+**PARTIALLY FIXED (payment gateway modularity pass)**: `ListParams` gained a `Gateway` field, wired into `AdminListTransactions`/`TransactionRepo.List` (`?gateway=manual` finds pending bank-transfer rows awaiting confirmation) — this part of the gap is closed. Still not fixed (flagged, not blocking): `AdminListTransactions`/`ListForClient` don't support the `invoice_id`/`date` filters the admin invoice-detail page and this doc (line 53) call for — only `status`/`search`/`gateway` are wired in `TransactionRepo.List`'s SQL, so the invoice-detail transaction-history fetch (`?invoice_id=`) still silently returns ALL transactions system-wide rather than just that invoice's. Needs a further filter add to `ListParams`/`TransactionRepo.List`, out of scope for this pass.
+
+## Cross-cutting notes
+- The scaffold components do NOT forward data-testid: button testids sit on a `<span class="contents" data-testid=...>` wrapper; FormField inputs are targetable via `#field-<name>`; row testids live on the name link (`row-<entity>-<id>`). E2E specs must use these patterns.
+- Default list ordering is assumed newest-first on every list endpoint.
+- The client dashboard sums its unpaid total from `?status=unpaid&per_page=100` (no summary endpoint needed).
+- adminops: staff CRUD + gateways are RequireRole(admin) only; canonical permission keys: clients, orders, billing, payments, services, domains, support, products, servers, registrars, settings, reports, logs, staff, gateways — every module MUST pick RequirePermission keys from this set.
+- adminops: gateway config keys `gateway.duitku.merchant_code|mode` go through SettingsRepo (not the settings Spec whitelist).
+- Dashboard "today/MTD" uses date_trunc in the DB session TZ (Asia/Jakarta locally) — internally consistent; don't "fix" it without a reason.

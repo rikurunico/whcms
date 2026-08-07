@@ -1,0 +1,38 @@
+# Build context is the repo root (see deploy/Dockerfile.*) — keep it lean.
+
+.git
+.gitignore
+docs
+PRD.md
+README.md
+deploy/env-examples
+
+# secrets
+.env
+.env.*
+**/*.env
+
+# Go build/test artifacts
+**/bin
+**/coverage.out
+**/coverage.html
+**/*.test
+backend/api
+backend/worker
+backend/seed
+backend/migrate
+backend/tmp
+mockserver/whcms-mock
+.e2e-logs
+
+# Node artifacts (fresh npm ci happens inside the image)
+**/node_modules
+frontend/build
+frontend/.svelte-kit
+frontend/test-results
+frontend/playwright-report
+
+# editors / OS
+.DS_Store
+.idea
+.vscode

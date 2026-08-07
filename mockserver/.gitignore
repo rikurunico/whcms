@@ -1,0 +1,5 @@
+# go build ./... drops the compiled binary here
+whcms-mock
+*.test
+coverage.out
+/mockserver

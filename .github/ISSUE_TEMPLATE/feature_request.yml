@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the hosting-provider workflow that is missing or painful today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should WHCMS do? Mention how WHMCS handles it, if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Billing / invoicing
+        - Orders / catalog
+        - Payments
+        - Provisioning
+        - Domains
+        - Tickets / support
+        - Client area
+        - Admin area
+        - Notifications / email
+        - Deploy / operations
+        - Other

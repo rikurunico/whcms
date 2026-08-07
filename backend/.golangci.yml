@@ -1,0 +1,58 @@
+# golangci-lint v2 configuration — keep the set modest and useful; the goal is
+# to stay green while catching real bugs, not to enforce stylistic churn.
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+    - errcheck
+    - copyloopvar
+    - rowserrcheck
+    - sqlclosecheck
+    - bodyclose
+  settings:
+    errcheck:
+      # Best-effort cleanup calls (close/remove on error paths, shutdown
+      # hooks) are idiomatic to leave unchecked.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.Rows).Close
+        - (*os.File).Close
+        - os.Remove
+        - (*github.com/golang-migrate/migrate/v4.Migrate).Close
+        - (*github.com/redis/go-redis/v9.Client).Close
+    staticcheck:
+      checks:
+        - all
+        # QF1001 (De Morgan rewrites) often makes guard clauses less
+        # readable than the original positive condition.
+        - -QF1001
+  exclusions:
+    rules:
+      # Test helpers commonly ignore errors on cleanup paths; httptest
+      # response bodies in table-driven handler tests trip bodyclose.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+          - bodyclose
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

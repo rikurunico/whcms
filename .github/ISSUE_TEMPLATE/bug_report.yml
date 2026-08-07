@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in WHCMS is broken
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! **Security vulnerabilities must NOT be filed
+        here** — use the private process in
+        [SECURITY.md](../blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. `make up`
+        2. Log in as admin, go to …
+        3. Click …
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Backend API (Go)
+        - Worker / jobs
+        - Frontend — admin area
+        - Frontend — client/public area
+        - Provisioning (cPanel/DirectAdmin)
+        - Domains (RDash)
+        - Payments (Duitku)
+        - Mockserver / E2E tooling
+        - Deploy / Docker
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        OS, Go/Node versions, Postgres version, running natively or via Docker Compose,
+        commit hash (`git rev-parse --short HEAD`)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: API/worker output, browser console, or `.e2e-logs/*` excerpts. Redact secrets.
+      render: shell

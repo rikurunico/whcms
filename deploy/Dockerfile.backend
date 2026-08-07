@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+#
+# WHCMS backend image — contains BOTH binaries (api + worker).
+# One image, two services: select the entrypoint via the container command
+# (default: /app/api; run the worker with command /app/worker).
+#
+# Build context MUST be the repository root:
+#   docker build -f deploy/Dockerfile.backend -t whcms/backend .
+
+# ---------- build stage ----------
+FROM golang:1.26-alpine AS build
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+
+# Cache module downloads separately from source changes.
+COPY backend/go.mod backend/go.sum* ./
+RUN go mod download
+
+COPY backend/ ./
+
+# Static binaries (no CGO) — run fine on plain alpine.
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
+    && go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+
+# ---------- final stage ----------
+FROM alpine:3.22
+
+# ca-certificates: outbound HTTPS (Duitku, RDash, WHM/DA)
+# tzdata: Asia/Jakarta display formatting, cron scheduling
+# wget is provided by busybox and is used for container healthchecks.
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S whcms && adduser -S -G whcms whcms
+
+WORKDIR /app
+
+COPY --from=build /out/api /app/api
+COPY --from=build /out/worker /app/worker
+# Migrations are embedded in the binaries (backend/migrations/embed.go) and
+# run automatically on API startup — nothing else needs to ship.
+
+# /data: writable by the non-root whcms user. Only used when the
+# installation wizard's bootstrap phase needs somewhere to persist the env
+# file it writes (ENV_FILE, docs/CONTRACTS.md §15) — normal deploys that
+# already provide env vars via the platform's secret manager never touch it.
+RUN mkdir -p /data && chown whcms:whcms /data
+
+USER whcms
+
+EXPOSE 8080
+
+# No HEALTHCHECK here on purpose: this image runs either the API or the
+# worker, and only the API serves /healthz — compose/platform probes handle it
+# per service (see deploy/docker-compose*.yml).
+
+# No ENTRYPOINT on purpose: compose/platform selects the binary via `command`.
+# Default: HTTP API server. Worker: CMD ["/app/worker"].
+CMD ["/app/api"]

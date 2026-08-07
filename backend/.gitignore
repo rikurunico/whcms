@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+/api
+/worker
+/seed
+/migrate
+*.exe
+
+# air (live-reload) build output
+/tmp/
+
+# Env
+.env
+.env.local
+
+# Coverage
+coverage.out
+coverage.html
+
+# OS
+.DS_Store

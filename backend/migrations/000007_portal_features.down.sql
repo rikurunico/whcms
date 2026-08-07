@@ -1,0 +1,6 @@
+ALTER TABLE IF EXISTS tickets DROP COLUMN IF EXISTS guest_email;
+ALTER TABLE IF EXISTS tickets DROP COLUMN IF EXISTS guest_name;
+DROP TABLE IF EXISTS network_issues;
+DROP TABLE IF EXISTS kb_articles;
+DROP TABLE IF EXISTS kb_categories;
+DROP TABLE IF EXISTS announcements;

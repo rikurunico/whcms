@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+/*
+ * WHCMS theme — WHMCS-like palette.
+ * Tokens declared inside @theme become Tailwind utilities
+ * (e.g. bg-primary, text-primary, bg-sidebar, text-success).
+ */
+@theme {
+	--color-primary: #336699;
+	--color-primary-dark: #28517a;
+	--color-primary-light: #4a90d9;
+	--color-sidebar: #141b2d;
+	--color-sidebar-hover: #1d2740;
+	--color-sidebar-active: #24314f;
+	--color-sidebar-text: #9aa5bd;
+	--color-success: #1a9c50;
+	--color-warning: #d99a1b;
+	--color-danger: #cc3333;
+	--color-info: #3388cc;
+	--color-surface: #f4f6f9;
+
+	--font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Raw custom properties for non-Tailwind consumers. */
+:root {
+	--wp-primary: #336699;
+	--wp-primary-light: #4a90d9;
+	--wp-sidebar-bg: #141b2d;
+	--wp-status-green: #1a9c50;
+	--wp-status-yellow: #d99a1b;
+	--wp-status-red: #cc3333;
+	--wp-status-gray: #6b7280;
+}
+
+body {
+	background-color: var(--color-surface);
+	color: #1f2937; /* gray-800 */
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+}

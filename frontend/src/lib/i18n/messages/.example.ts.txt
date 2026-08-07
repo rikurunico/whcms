@@ -1,0 +1,9 @@
+/** Example feature namespace — agents create their own <name>.ts like this. */
+import type { Locale } from "../i18n.svelte";
+
+const messages: Partial<Record<Locale, Record<string, unknown>>> = {
+	id: {},
+	en: {}
+};
+
+export default messages;
