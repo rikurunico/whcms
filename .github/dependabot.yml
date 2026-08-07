@@ -24,6 +24,11 @@ updates:
       npm-dev:
         dependency-type: development
         patterns: ["*"]
+    ignore:
+      # @sveltejs/kit's peer range caps typescript at ^6; take TypeScript
+      # majors deliberately once the Svelte toolchain supports them.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -34,3 +39,8 @@ updates:
     directory: /deploy
     schedule:
       interval: weekly
+    ignore:
+      # Track Node LTS lines only: odd majors (23, 25, ...) are short-lived
+      # current releases, and CI + docs standardize on the LTS runtime.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
