@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from './fixtures';
+import { expect, test, waitForHydration, type APIRequestContext } from './fixtures';
 import { adminToken, sleep } from './helpers';
 
 /**
@@ -366,6 +366,10 @@ test.describe('admin-ops (Flow 7)', () => {
 		// exact same table as "Add a spec knob", swapped in inline in place of
 		// the read-only summary. Drive it end to end and confirm the change
 		// persists after a reload.
+		// If either submit above fell back to a native post (its click raced
+		// hydration), the browser loaded a FRESH document: wait for that
+		// document's own hydration before driving the pure-JS edit toggle.
+		await waitForHydration(page);
 		await page.locator('[data-testid^="spec-edit-"]').click();
 		const specEditForm = page.locator('[data-testid^="admin-spec-edit-form-"]');
 		await expect(specEditForm).toBeVisible();

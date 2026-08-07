@@ -11,19 +11,28 @@
  * Specs import { test, expect } from './fixtures' instead of
  * '@playwright/test'; everything else re-exports unchanged.
  */
-import { test as base } from '@playwright/test';
+import { test as base, type Page } from '@playwright/test';
 
 export * from '@playwright/test';
+
+/**
+ * Wait for the current document to be hydrated. Also useful mid-test: a form
+ * submit that itself raced hydration falls back to a NATIVE post, which loads
+ * a fresh document whose pure-JS controls need hydration all over again.
+ * Best effort: error pages or non-app URLs may never hydrate.
+ */
+export async function waitForHydration(page: Page): Promise<void> {
+	await page
+		.waitForSelector('html[data-hydrated]', { state: 'attached', timeout: 15_000 })
+		.catch(() => {});
+}
 
 export const test = base.extend({
 	page: async ({ page }, use) => {
 		const originalGoto = page.goto.bind(page);
 		page.goto = (async (url: string, options?: Parameters<typeof originalGoto>[1]) => {
 			const response = await originalGoto(url, options);
-			// Best effort: error pages or non-app URLs may never hydrate.
-			await page
-				.waitForSelector('html[data-hydrated]', { state: 'attached', timeout: 15_000 })
-				.catch(() => {});
+			await waitForHydration(page);
 			return response;
 		}) as typeof page.goto;
 		await use(page);
