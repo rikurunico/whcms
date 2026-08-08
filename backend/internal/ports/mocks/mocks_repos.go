@@ -179,29 +179,29 @@ func (m *MockClientRepo) AdjustCredit(ctx context.Context, clientID int64, delta
 
 // MockProductRepo mocks ports.ProductRepo.
 type MockProductRepo struct {
-	CreateFn           func(ctx context.Context, pr *domain.Product) error
-	GetByIDFn          func(ctx context.Context, id int64) (*domain.Product, error)
-	GetBySlugFn        func(ctx context.Context, slug string) (*domain.Product, error)
-	UpdateFn           func(ctx context.Context, pr *domain.Product) error
-	ListFn             func(ctx context.Context, p ports.ListParams) ([]domain.Product, int64, error)
-	SoftDeleteFn       func(ctx context.Context, id int64) error
-	CreateGroupFn      func(ctx context.Context, g *domain.ProductGroup) error
-	GetGroupByIDFn     func(ctx context.Context, id int64) (*domain.ProductGroup, error)
-	UpdateGroupFn      func(ctx context.Context, g *domain.ProductGroup) error
-	ListGroupsFn       func(ctx context.Context, includeHidden bool) ([]domain.ProductGroup, error)
-	SoftDeleteGroupFn  func(ctx context.Context, id int64) error
-	UpsertPricingFn    func(ctx context.Context, pp *domain.ProductPricing) error
-	GetPricingFn       func(ctx context.Context, productID int64, cycle domain.BillingCycle) (*domain.ProductPricing, error)
-	ListPricingFn      func(ctx context.Context, productID int64) ([]domain.ProductPricing, error)
-	DeletePricingFn    func(ctx context.Context, productID int64, cycle domain.BillingCycle) error
-	ListOptionGroupsFn func(ctx context.Context) ([]domain.ConfigurableOptionGroup, error)
-	ListOptionsFn      func(ctx context.Context, groupID int64) ([]domain.ConfigurableOption, error)
-	ListOptionValuesFn func(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error)
-	ListOptionsByGroupIDsFn      func(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error)
+	CreateFn                      func(ctx context.Context, pr *domain.Product) error
+	GetByIDFn                     func(ctx context.Context, id int64) (*domain.Product, error)
+	GetBySlugFn                   func(ctx context.Context, slug string) (*domain.Product, error)
+	UpdateFn                      func(ctx context.Context, pr *domain.Product) error
+	ListFn                        func(ctx context.Context, p ports.ListParams) ([]domain.Product, int64, error)
+	SoftDeleteFn                  func(ctx context.Context, id int64) error
+	CreateGroupFn                 func(ctx context.Context, g *domain.ProductGroup) error
+	GetGroupByIDFn                func(ctx context.Context, id int64) (*domain.ProductGroup, error)
+	UpdateGroupFn                 func(ctx context.Context, g *domain.ProductGroup) error
+	ListGroupsFn                  func(ctx context.Context, includeHidden bool) ([]domain.ProductGroup, error)
+	SoftDeleteGroupFn             func(ctx context.Context, id int64) error
+	UpsertPricingFn               func(ctx context.Context, pp *domain.ProductPricing) error
+	GetPricingFn                  func(ctx context.Context, productID int64, cycle domain.BillingCycle) (*domain.ProductPricing, error)
+	ListPricingFn                 func(ctx context.Context, productID int64) ([]domain.ProductPricing, error)
+	DeletePricingFn               func(ctx context.Context, productID int64, cycle domain.BillingCycle) error
+	ListOptionGroupsFn            func(ctx context.Context) ([]domain.ConfigurableOptionGroup, error)
+	ListOptionsFn                 func(ctx context.Context, groupID int64) ([]domain.ConfigurableOption, error)
+	ListOptionValuesFn            func(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error)
+	ListOptionsByGroupIDsFn       func(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error)
 	ListOptionValuesByOptionIDsFn func(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error)
-	ListSpecsFn        func(ctx context.Context, productID int64) ([]domain.ProductSpec, error)
-	GetSpecPricingFn   func(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
-	DecrementStockFn   func(ctx context.Context, productID int64) error
+	ListSpecsFn                   func(ctx context.Context, productID int64) ([]domain.ProductSpec, error)
+	GetSpecPricingFn              func(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
+	DecrementStockFn              func(ctx context.Context, productID int64) error
 }
 
 func (m *MockProductRepo) Create(ctx context.Context, pr *domain.Product) error {
@@ -495,20 +495,20 @@ func (m *MockOrderRepo) NextNumber(ctx context.Context, scope string) (int64, er
 
 // MockInvoiceRepo mocks ports.InvoiceRepo.
 type MockInvoiceRepo struct {
-	CreateFn           func(ctx context.Context, inv *domain.Invoice, items []domain.InvoiceItem) error
-	GetByIDFn          func(ctx context.Context, id int64) (*domain.Invoice, error)
-	GetByNumberFn      func(ctx context.Context, number string) (*domain.Invoice, error)
-	GetByIDForUpdateFn func(ctx context.Context, id int64) (*domain.Invoice, error)
-	GetItemsFn         func(ctx context.Context, invoiceID int64) ([]domain.InvoiceItem, error)
+	CreateFn               func(ctx context.Context, inv *domain.Invoice, items []domain.InvoiceItem) error
+	GetByIDFn              func(ctx context.Context, id int64) (*domain.Invoice, error)
+	GetByNumberFn          func(ctx context.Context, number string) (*domain.Invoice, error)
+	GetByIDForUpdateFn     func(ctx context.Context, id int64) (*domain.Invoice, error)
+	GetItemsFn             func(ctx context.Context, invoiceID int64) ([]domain.InvoiceItem, error)
 	GetItemsByInvoiceIDsFn func(ctx context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error)
-	AddItemFn          func(ctx context.Context, item *domain.InvoiceItem) error
-	UpdateFn           func(ctx context.Context, inv *domain.Invoice) error
-	UpdateStatusFn     func(ctx context.Context, id int64, status domain.InvoiceStatus, paidAt *time.Time) error
-	SetPDFObjectKeyFn  func(ctx context.Context, id int64, key string) error
-	ListFn             func(ctx context.Context, p ports.ListParams) ([]domain.Invoice, int64, error)
-	ListByClientFn     func(ctx context.Context, clientID int64, p ports.ListParams) ([]domain.Invoice, int64, error)
-	ListDueForStatusFn func(ctx context.Context, status domain.InvoiceStatus, before time.Time) ([]domain.Invoice, error)
-	NextNumberFn       func(ctx context.Context, scope string) (int64, error)
+	AddItemFn              func(ctx context.Context, item *domain.InvoiceItem) error
+	UpdateFn               func(ctx context.Context, inv *domain.Invoice) error
+	UpdateStatusFn         func(ctx context.Context, id int64, status domain.InvoiceStatus, paidAt *time.Time) error
+	SetPDFObjectKeyFn      func(ctx context.Context, id int64, key string) error
+	ListFn                 func(ctx context.Context, p ports.ListParams) ([]domain.Invoice, int64, error)
+	ListByClientFn         func(ctx context.Context, clientID int64, p ports.ListParams) ([]domain.Invoice, int64, error)
+	ListDueForStatusFn     func(ctx context.Context, status domain.InvoiceStatus, before time.Time) ([]domain.Invoice, error)
+	NextNumberFn           func(ctx context.Context, scope string) (int64, error)
 }
 
 func (m *MockInvoiceRepo) Create(ctx context.Context, inv *domain.Invoice, items []domain.InvoiceItem) error {
