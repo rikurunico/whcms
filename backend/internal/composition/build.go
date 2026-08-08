@@ -406,6 +406,7 @@ func Build(ctx context.Context, cfg config.Config, database *db.DB, rdb *redis.C
 		Clock:                  clk,
 		Log:                    log,
 		RegistrarAPIKeyPresent: cfg.RDashAPIKey != "",
+		AllowPrivateBaseURL:    !cfg.IsProduction(),
 	})
 	drFwd.inner = domainsSvc
 

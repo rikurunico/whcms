@@ -109,6 +109,9 @@ type SpecStore interface {
 	UpdateSpec(ctx context.Context, s *domain.ProductSpec) error
 	DeleteSpec(ctx context.Context, id int64) error
 	ListSpecPricing(ctx context.Context, specID int64) ([]domain.ProductSpecPricing, error)
+	// ListSpecPricingBySpecIDs batch-loads pricing across many specs at once
+	// (keyed by spec_id), to avoid an N+1 query per spec.
+	ListSpecPricingBySpecIDs(ctx context.Context, specIDs []int64) (map[int64][]domain.ProductSpecPricing, error)
 	GetSpecPricing(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
 	UpsertSpecPricing(ctx context.Context, p *domain.ProductSpecPricing) error
 	DeleteSpecPricing(ctx context.Context, specID int64, cycle domain.BillingCycle) error
@@ -303,12 +306,17 @@ func (s *Service) publicSpecs(ctx context.Context, productID int64) ([]PublicSpe
 	if err != nil {
 		return nil, wrap(err)
 	}
+	specIDs := make([]int64, len(specs))
+	for i, sp := range specs {
+		specIDs[i] = sp.ID
+	}
+	pricingBySpec, err := s.d.Specs.ListSpecPricingBySpecIDs(ctx, specIDs)
+	if err != nil {
+		return nil, wrap(err)
+	}
 	out := make([]PublicSpec, 0, len(specs))
 	for _, sp := range specs {
-		pricing, err := s.d.Specs.ListSpecPricing(ctx, sp.ID)
-		if err != nil {
-			return nil, wrap(err)
-		}
+		pricing := pricingBySpec[sp.ID]
 		prices := make([]PublicSpecPrice, 0, len(pricing))
 		for _, pp := range pricing {
 			prices = append(prices, PublicSpecPrice{
@@ -747,12 +755,17 @@ func (s *Service) DuplicateProduct(ctx context.Context, actorUserID, id int64) (
 	if err != nil {
 		return nil, wrap(err)
 	}
+	specIDs := make([]int64, len(specs))
+	for i, sp := range specs {
+		specIDs[i] = sp.ID
+	}
+	pricingBySpec, err := s.d.Specs.ListSpecPricingBySpecIDs(ctx, specIDs)
+	if err != nil {
+		return nil, wrap(err)
+	}
 	specPricing := make([][]domain.ProductSpecPricing, len(specs))
 	for i, sp := range specs {
-		specPricing[i], err = s.d.Specs.ListSpecPricing(ctx, sp.ID)
-		if err != nil {
-			return nil, wrap(err)
-		}
+		specPricing[i] = pricingBySpec[sp.ID]
 	}
 
 	dst := &domain.Product{
@@ -920,19 +933,31 @@ func (s *Service) OptionTree(ctx context.Context) ([]OptionGroupTree, error) {
 	if err != nil {
 		return nil, wrap(err)
 	}
+	groupIDs := make([]int64, len(groups))
+	for i, g := range groups {
+		groupIDs[i] = g.ID
+	}
+	optionsByGroup, err := s.d.Products.ListOptionsByGroupIDs(ctx, groupIDs)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	var optionIDs []int64
+	for _, options := range optionsByGroup {
+		for _, o := range options {
+			optionIDs = append(optionIDs, o.ID)
+		}
+	}
+	valuesByOption, err := s.d.Products.ListOptionValuesByOptionIDs(ctx, optionIDs)
+	if err != nil {
+		return nil, wrap(err)
+	}
+
 	out := make([]OptionGroupTree, 0, len(groups))
 	for _, g := range groups {
-		options, err := s.d.Products.ListOptions(ctx, g.ID)
-		if err != nil {
-			return nil, wrap(err)
-		}
+		options := optionsByGroup[g.ID]
 		entries := make([]OptionTreeEntry, 0, len(options))
 		for _, o := range options {
-			values, err := s.d.Products.ListOptionValues(ctx, o.ID)
-			if err != nil {
-				return nil, wrap(err)
-			}
-			entries = append(entries, OptionTreeEntry{Option: o, Values: values})
+			entries = append(entries, OptionTreeEntry{Option: o, Values: valuesByOption[o.ID]})
 		}
 		out = append(out, OptionGroupTree{Group: g, Options: entries})
 	}

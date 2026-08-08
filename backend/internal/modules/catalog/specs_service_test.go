@@ -20,6 +20,7 @@ type fakeSpecStore struct {
 	UpdateSpecFn      func(ctx context.Context, s *domain.ProductSpec) error
 	DeleteSpecFn      func(ctx context.Context, id int64) error
 	ListSpecPricingFn func(ctx context.Context, specID int64) ([]domain.ProductSpecPricing, error)
+	ListSpecPricingBySpecIDsFn func(ctx context.Context, specIDs []int64) (map[int64][]domain.ProductSpecPricing, error)
 	GetSpecPricingFn  func(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
 	UpsertSpecPriceFn func(ctx context.Context, p *domain.ProductSpecPricing) error
 	DeleteSpecPriceFn func(ctx context.Context, specID int64, cycle domain.BillingCycle) error
@@ -61,6 +62,20 @@ func (f *fakeSpecStore) ListSpecPricing(ctx context.Context, specID int64) ([]do
 		return f.ListSpecPricingFn(ctx, specID)
 	}
 	return nil, nil
+}
+func (f *fakeSpecStore) ListSpecPricingBySpecIDs(ctx context.Context, specIDs []int64) (map[int64][]domain.ProductSpecPricing, error) {
+	if f.ListSpecPricingBySpecIDsFn != nil {
+		return f.ListSpecPricingBySpecIDsFn(ctx, specIDs)
+	}
+	out := make(map[int64][]domain.ProductSpecPricing)
+	for _, id := range specIDs {
+		pricing, err := f.ListSpecPricing(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = pricing
+	}
+	return out, nil
 }
 func (f *fakeSpecStore) GetSpecPricing(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error) {
 	if f.GetSpecPricingFn != nil {

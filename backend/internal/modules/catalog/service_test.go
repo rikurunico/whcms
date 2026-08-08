@@ -492,11 +492,11 @@ func TestPublicProductBySlug(t *testing.T) {
 	f.products.ListOptionGroupsFn = func(ctx context.Context) ([]domain.ConfigurableOptionGroup, error) {
 		return []domain.ConfigurableOptionGroup{{ID: 1, Name: "Extras"}}, nil
 	}
-	f.products.ListOptionsFn = func(ctx context.Context, groupID int64) ([]domain.ConfigurableOption, error) {
-		return []domain.ConfigurableOption{{ID: 2, GroupID: groupID, Name: "RAM"}}, nil
+	f.products.ListOptionsByGroupIDsFn = func(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error) {
+		return map[int64][]domain.ConfigurableOption{1: {{ID: 2, GroupID: 1, Name: "RAM"}}}, nil
 	}
-	f.products.ListOptionValuesFn = func(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error) {
-		return []domain.ConfigurableOptionValue{{ID: 3, OptionID: optionID, Name: "2GB"}}, nil
+	f.products.ListOptionValuesByOptionIDsFn = func(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error) {
+		return map[int64][]domain.ConfigurableOptionValue{2: {{ID: 3, OptionID: 2, Name: "2GB"}}}, nil
 	}
 
 	detail, err := f.svc.PublicProductBySlug(context.Background(), "basic")
@@ -1088,6 +1088,32 @@ func TestListPricingChecksProduct(t *testing.T) {
 }
 
 // Configurable options (admin)
+
+func TestOptionTreeBuildsNestedTreeFromBatchedLoads(t *testing.T) {
+	f := newFixture()
+	f.products.ListOptionGroupsFn = func(ctx context.Context) ([]domain.ConfigurableOptionGroup, error) {
+		return []domain.ConfigurableOptionGroup{{ID: 1, Name: "Extras"}, {ID: 2, Name: "Empty"}}, nil
+	}
+	f.products.ListOptionsByGroupIDsFn = func(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error) {
+		assert.ElementsMatch(t, []int64{1, 2}, groupIDs)
+		return map[int64][]domain.ConfigurableOption{
+			1: {{ID: 10, GroupID: 1, Name: "RAM"}},
+		}, nil
+	}
+	f.products.ListOptionValuesByOptionIDsFn = func(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error) {
+		assert.Equal(t, []int64{10}, optionIDs)
+		return map[int64][]domain.ConfigurableOptionValue{
+			10: {{ID: 100, OptionID: 10, Name: "2GB"}},
+		}, nil
+	}
+
+	tree, err := f.svc.OptionTree(context.Background())
+	require.NoError(t, err)
+	require.Len(t, tree, 2)
+	require.Len(t, tree[0].Options, 1)
+	assert.Equal(t, "2GB", tree[0].Options[0].Values[0].Name)
+	assert.Empty(t, tree[1].Options)
+}
 
 func TestCreateOptionValueRejectsBadDeltas(t *testing.T) {
 	f := newFixture()

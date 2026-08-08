@@ -146,16 +146,20 @@ func TestServiceErrorPropagation(t *testing.T) {
 			f.products.ListOptionGroupsFn = func(context.Context) ([]domain.ConfigurableOptionGroup, error) {
 				return []domain.ConfigurableOptionGroup{{ID: 1}}, nil
 			}
-			f.products.ListOptionsFn = func(context.Context, int64) ([]domain.ConfigurableOption, error) { return nil, errBoom }
+			f.products.ListOptionsByGroupIDsFn = func(context.Context, []int64) (map[int64][]domain.ConfigurableOption, error) {
+				return nil, errBoom
+			}
 		}, func(f *fixtures) error { _, err := f.svc.OptionTree(ctx); return err }},
 		{"OptionTree values", func(f *fixtures) {
 			f.products.ListOptionGroupsFn = func(context.Context) ([]domain.ConfigurableOptionGroup, error) {
 				return []domain.ConfigurableOptionGroup{{ID: 1}}, nil
 			}
-			f.products.ListOptionsFn = func(context.Context, int64) ([]domain.ConfigurableOption, error) {
-				return []domain.ConfigurableOption{{ID: 2}}, nil
+			f.products.ListOptionsByGroupIDsFn = func(context.Context, []int64) (map[int64][]domain.ConfigurableOption, error) {
+				return map[int64][]domain.ConfigurableOption{1: {{ID: 2}}}, nil
 			}
-			f.products.ListOptionValuesFn = func(context.Context, int64) ([]domain.ConfigurableOptionValue, error) { return nil, errBoom }
+			f.products.ListOptionValuesByOptionIDsFn = func(context.Context, []int64) (map[int64][]domain.ConfigurableOptionValue, error) {
+				return nil, errBoom
+			}
 		}, func(f *fixtures) error { _, err := f.svc.OptionTree(ctx); return err }},
 		{"CreateOptionGroup", func(f *fixtures) {
 			f.options.CreateOptionGroupFn = func(context.Context, *domain.ConfigurableOptionGroup) error { return errBoom }

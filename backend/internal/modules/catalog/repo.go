@@ -545,6 +545,34 @@ func (r *Repo) ListOptions(ctx context.Context, groupID int64) ([]domain.Configu
 	return out, nil
 }
 
+// ListOptionsByGroupIDs batch-loads options for many groups in one query,
+// keyed by group_id, to avoid an N+1 query per group.
+func (r *Repo) ListOptionsByGroupIDs(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error) {
+	out := make(map[int64][]domain.ConfigurableOption)
+	if len(groupIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Querier(ctx).Query(ctx,
+		`SELECT id, group_id, name, sort, created_at, updated_at
+		 FROM configurable_options WHERE group_id = ANY($1) ORDER BY group_id, sort, id`, groupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list options by group ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var o domain.ConfigurableOption
+		if err := rows.Scan(&o.ID, &o.GroupID, &o.Name, &o.Sort, &o.CreatedAt, &o.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("catalog: scan option: %w", err)
+		}
+		out[o.GroupID] = append(out[o.GroupID], o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: options rows: %w", err)
+	}
+	return out, nil
+}
+
 // ListOptionValues returns the values of an option ordered by sort.
 func (r *Repo) ListOptionValues(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error) {
 	rows, err := r.db.Querier(ctx).Query(ctx,
@@ -562,6 +590,34 @@ func (r *Repo) ListOptionValues(ctx context.Context, optionID int64) ([]domain.C
 			return nil, fmt.Errorf("catalog: scan option value: %w", err)
 		}
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: option values rows: %w", err)
+	}
+	return out, nil
+}
+
+// ListOptionValuesByOptionIDs batch-loads values for many options in one
+// query, keyed by option_id, to avoid an N+1 query per option.
+func (r *Repo) ListOptionValuesByOptionIDs(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error) {
+	out := make(map[int64][]domain.ConfigurableOptionValue)
+	if len(optionIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Querier(ctx).Query(ctx,
+		`SELECT id, option_id, name, price_deltas, sort, created_at, updated_at
+		 FROM configurable_option_values WHERE option_id = ANY($1) ORDER BY option_id, sort, id`, optionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list option values by option ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var v domain.ConfigurableOptionValue
+		if err := rows.Scan(&v.ID, &v.OptionID, &v.Name, &v.PriceDeltas, &v.Sort, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("catalog: scan option value: %w", err)
+		}
+		out[v.OptionID] = append(out[v.OptionID], v)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("catalog: option values rows: %w", err)

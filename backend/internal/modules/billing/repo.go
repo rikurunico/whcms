@@ -115,6 +115,33 @@ func (r *Repo) GetItems(ctx context.Context, invoiceID int64) ([]domain.InvoiceI
 	return out, rows.Err()
 }
 
+// GetItemsByInvoiceIDs batch-loads items for many invoices in one query,
+// keyed by invoice_id, to avoid an N+1 query per invoice.
+func (r *Repo) GetItemsByInvoiceIDs(ctx context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error) {
+	out := make(map[int64][]domain.InvoiceItem)
+	if len(invoiceIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Querier(ctx).Query(ctx, `
+		SELECT id, invoice_id, description, amount, taxed, related_type, related_id,
+			created_at, updated_at
+		FROM invoice_items WHERE invoice_id = ANY($1) ORDER BY invoice_id, id`, invoiceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("billing: get items by invoice ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var it domain.InvoiceItem
+		if err := rows.Scan(&it.ID, &it.InvoiceID, &it.Description, &it.Amount, &it.Taxed,
+			&it.RelatedType, &it.RelatedID, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("billing: scan item: %w", err)
+		}
+		out[it.InvoiceID] = append(out[it.InvoiceID], it)
+	}
+	return out, rows.Err()
+}
+
 // AddItem inserts one invoice item.
 func (r *Repo) AddItem(ctx context.Context, item *domain.InvoiceItem) error {
 	err := r.db.Querier(ctx).QueryRow(ctx, `

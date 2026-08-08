@@ -113,6 +113,11 @@ type ProductRepo interface {
 	ListOptionGroups(ctx context.Context) ([]domain.ConfigurableOptionGroup, error)
 	ListOptions(ctx context.Context, groupID int64) ([]domain.ConfigurableOption, error)
 	ListOptionValues(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error)
+	// ListOptionsByGroupIDs and ListOptionValuesByOptionIDs batch-load across
+	// many groups/options at once (keyed by group_id/option_id), to avoid an
+	// N+1 query per group/option in tree-building callers like OptionTree.
+	ListOptionsByGroupIDs(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error)
+	ListOptionValuesByOptionIDs(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error)
 	// Dynamic-product specs (read surface used by orders pricing + provisioning)
 	ListSpecs(ctx context.Context, productID int64) ([]domain.ProductSpec, error)
 	GetSpecPricing(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
@@ -154,6 +159,10 @@ type InvoiceRepo interface {
 	// called inside a TxManager.WithinTx.
 	GetByIDForUpdate(ctx context.Context, id int64) (*domain.Invoice, error)
 	GetItems(ctx context.Context, invoiceID int64) ([]domain.InvoiceItem, error)
+	// GetItemsByInvoiceIDs batch-loads items for many invoices at once (keyed
+	// by invoice_id), to avoid an N+1 query per invoice in callers that already
+	// hold a list of invoices.
+	GetItemsByInvoiceIDs(ctx context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error)
 	AddItem(ctx context.Context, item *domain.InvoiceItem) error
 	Update(ctx context.Context, inv *domain.Invoice) error
 	UpdateStatus(ctx context.Context, id int64, status domain.InvoiceStatus, paidAt *time.Time) error

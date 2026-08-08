@@ -197,6 +197,8 @@ type MockProductRepo struct {
 	ListOptionGroupsFn func(ctx context.Context) ([]domain.ConfigurableOptionGroup, error)
 	ListOptionsFn      func(ctx context.Context, groupID int64) ([]domain.ConfigurableOption, error)
 	ListOptionValuesFn func(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error)
+	ListOptionsByGroupIDsFn      func(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error)
+	ListOptionValuesByOptionIDsFn func(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error)
 	ListSpecsFn        func(ctx context.Context, productID int64) ([]domain.ProductSpec, error)
 	GetSpecPricingFn   func(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
 	DecrementStockFn   func(ctx context.Context, productID int64) error
@@ -324,6 +326,20 @@ func (m *MockProductRepo) ListOptions(ctx context.Context, groupID int64) ([]dom
 func (m *MockProductRepo) ListOptionValues(ctx context.Context, optionID int64) ([]domain.ConfigurableOptionValue, error) {
 	if m.ListOptionValuesFn != nil {
 		return m.ListOptionValuesFn(ctx, optionID)
+	}
+	return nil, nil
+}
+
+func (m *MockProductRepo) ListOptionsByGroupIDs(ctx context.Context, groupIDs []int64) (map[int64][]domain.ConfigurableOption, error) {
+	if m.ListOptionsByGroupIDsFn != nil {
+		return m.ListOptionsByGroupIDsFn(ctx, groupIDs)
+	}
+	return nil, nil
+}
+
+func (m *MockProductRepo) ListOptionValuesByOptionIDs(ctx context.Context, optionIDs []int64) (map[int64][]domain.ConfigurableOptionValue, error) {
+	if m.ListOptionValuesByOptionIDsFn != nil {
+		return m.ListOptionValuesByOptionIDsFn(ctx, optionIDs)
 	}
 	return nil, nil
 }
@@ -484,6 +500,7 @@ type MockInvoiceRepo struct {
 	GetByNumberFn      func(ctx context.Context, number string) (*domain.Invoice, error)
 	GetByIDForUpdateFn func(ctx context.Context, id int64) (*domain.Invoice, error)
 	GetItemsFn         func(ctx context.Context, invoiceID int64) ([]domain.InvoiceItem, error)
+	GetItemsByInvoiceIDsFn func(ctx context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error)
 	AddItemFn          func(ctx context.Context, item *domain.InvoiceItem) error
 	UpdateFn           func(ctx context.Context, inv *domain.Invoice) error
 	UpdateStatusFn     func(ctx context.Context, id int64, status domain.InvoiceStatus, paidAt *time.Time) error
@@ -525,6 +542,13 @@ func (m *MockInvoiceRepo) GetByIDForUpdate(ctx context.Context, id int64) (*doma
 func (m *MockInvoiceRepo) GetItems(ctx context.Context, invoiceID int64) ([]domain.InvoiceItem, error) {
 	if m.GetItemsFn != nil {
 		return m.GetItemsFn(ctx, invoiceID)
+	}
+	return nil, nil
+}
+
+func (m *MockInvoiceRepo) GetItemsByInvoiceIDs(ctx context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error) {
+	if m.GetItemsByInvoiceIDsFn != nil {
+		return m.GetItemsByInvoiceIDsFn(ctx, invoiceIDs)
 	}
 	return nil, nil
 }

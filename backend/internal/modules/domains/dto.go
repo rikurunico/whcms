@@ -2,6 +2,7 @@ package domains
 
 import (
 	"encoding/json"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -405,7 +406,13 @@ func ValidateNameservers(ns []string) ([]string, error) {
 // blank is always valid (falls back to RDASH_BASE_URL), otherwise it must be
 // a well-formed absolute http(s) URL - catching an obvious typo before it
 // silently breaks every registrar call far from this settings page.
-func ValidateRegistrarBaseURL(raw string) error {
+//
+// allowPrivate additionally lets it point at a loopback/private/link-local
+// host (needed in dev/test to target the mockserver at localhost:9090); when
+// false (production), such hosts are rejected so the override can't be used
+// to make the server send authenticated RDash requests to an internal
+// service or the cloud metadata endpoint (169.254.169.254).
+func ValidateRegistrarBaseURL(raw string, allowPrivate bool) error {
 	if raw == "" {
 		return nil
 	}
@@ -413,5 +420,26 @@ func ValidateRegistrarBaseURL(raw string) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return apperr.Validation("base_url must be a valid absolute http(s) URL")
 	}
+	if !allowPrivate && isPrivateOrLoopbackHost(u.Hostname()) {
+		return apperr.Validation("base_url must not point to a private/loopback host")
+	}
 	return nil
+}
+
+// isPrivateOrLoopbackHost reports whether host (a URL hostname, possibly a
+// literal IP) resolves to a loopback, private, or link-local address. A
+// non-IP hostname (real DNS name) is not flagged here - the SSRF risk this
+// guards against is an admin pointing the override straight at a literal
+// internal IP; blocking every non-numeric hostname would also break using a
+// real domain that only later resolves internally, which is out of scope for
+// a synchronous input check.
+func isPrivateOrLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }

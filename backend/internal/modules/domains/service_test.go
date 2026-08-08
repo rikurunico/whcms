@@ -88,6 +88,7 @@ func (d *deps) svc() *domains.Service {
 		Encryptor:            d.encryptor,
 		Audit:                d.audit,
 		Clock:                d.clock,
+		AllowPrivateBaseURL:  true,
 	})
 }
 
@@ -190,13 +191,23 @@ func TestValidateNameservers(t *testing.T) {
 }
 
 func TestValidateRegistrarBaseURL(t *testing.T) {
-	assert.NoError(t, domains.ValidateRegistrarBaseURL(""))
-	assert.NoError(t, domains.ValidateRegistrarBaseURL("http://localhost:9090/v1"))
-	assert.NoError(t, domains.ValidateRegistrarBaseURL("https://api.dewabiz.co.id/v1"))
+	assert.NoError(t, domains.ValidateRegistrarBaseURL("", false))
+	assert.NoError(t, domains.ValidateRegistrarBaseURL("https://api.dewabiz.co.id/v1", false))
+	// A dev/test-only override may point at the mockserver on localhost.
+	assert.NoError(t, domains.ValidateRegistrarBaseURL("http://localhost:9090/v1", true))
+	assert.NoError(t, domains.ValidateRegistrarBaseURL("http://127.0.0.1:9090/v1", true))
 
-	assertCode(t, domains.ValidateRegistrarBaseURL("not-a-url"), apperr.CodeValidation)
-	assertCode(t, domains.ValidateRegistrarBaseURL("ftp://example.com"), apperr.CodeValidation)
-	assertCode(t, domains.ValidateRegistrarBaseURL("http://"), apperr.CodeValidation)
+	assertCode(t, domains.ValidateRegistrarBaseURL("not-a-url", true), apperr.CodeValidation)
+	assertCode(t, domains.ValidateRegistrarBaseURL("ftp://example.com", true), apperr.CodeValidation)
+	assertCode(t, domains.ValidateRegistrarBaseURL("http://", true), apperr.CodeValidation)
+
+	// In production (allowPrivate=false), a loopback/private/link-local
+	// override host is rejected - it would otherwise let a compromised admin
+	// point authenticated outbound RDash calls at an internal service.
+	assertCode(t, domains.ValidateRegistrarBaseURL("http://localhost:9090/v1", false), apperr.CodeValidation)
+	assertCode(t, domains.ValidateRegistrarBaseURL("http://127.0.0.1:9090/v1", false), apperr.CodeValidation)
+	assertCode(t, domains.ValidateRegistrarBaseURL("http://10.0.0.5/v1", false), apperr.CodeValidation)
+	assertCode(t, domains.ValidateRegistrarBaseURL("http://169.254.169.254/latest/meta-data", false), apperr.CodeValidation)
 }
 
 // CheckAvailability

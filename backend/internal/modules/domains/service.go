@@ -103,6 +103,14 @@ type Deps struct {
 	// environment (never the key itself) - surfaced to the admin registrars
 	// UI so it can show "configured" instead of guessing.
 	RegistrarAPIKeyPresent bool
+
+	// AllowPrivateBaseURL permits the registrar base_url override (CLAUDE.md
+	// §0.3) to point at a loopback/private/link-local host - true only
+	// outside production (cfg.IsProduction()), so local dev/test can still
+	// target the mockserver at localhost:9090, while a compromised or
+	// careless production admin account can't be used to make the server
+	// send authenticated requests to internal-network/cloud-metadata hosts.
+	AllowPrivateBaseURL bool
 }
 
 // Service implements the domains use-cases. It satisfies ports.DomainRenewer.
@@ -873,7 +881,7 @@ func (s *Service) UpdateRegistrar(ctx context.Context, actorUserID, id int64, in
 		}
 	}
 	if in.BaseURL != nil {
-		if err := ValidateRegistrarBaseURL(*in.BaseURL); err != nil {
+		if err := ValidateRegistrarBaseURL(*in.BaseURL, s.d.AllowPrivateBaseURL); err != nil {
 			return nil, err
 		}
 		reg.BaseURL = *in.BaseURL

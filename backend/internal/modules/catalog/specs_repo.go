@@ -184,6 +184,34 @@ func (r *Repo) ListSpecPricing(ctx context.Context, specID int64) ([]domain.Prod
 	return out, nil
 }
 
+// ListSpecPricingBySpecIDs batch-loads pricing for many specs in one query,
+// keyed by spec_id, to avoid an N+1 query per spec.
+func (r *Repo) ListSpecPricingBySpecIDs(ctx context.Context, specIDs []int64) (map[int64][]domain.ProductSpecPricing, error) {
+	out := make(map[int64][]domain.ProductSpecPricing)
+	if len(specIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Querier(ctx).Query(ctx,
+		`SELECT `+specPricingCols+` FROM product_spec_pricing
+		 WHERE spec_id = ANY($1) AND currency = 'IDR' ORDER BY spec_id, id`, specIDs)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list spec pricing by spec ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		p, err := scanSpecPricing(rows)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: scan spec pricing: %w", err)
+		}
+		out[p.SpecID] = append(out[p.SpecID], *p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: spec pricing rows: %w", err)
+	}
+	return out, nil
+}
+
 // DeleteSpecPricing removes the IDR unit-price row for (spec, cycle).
 func (r *Repo) DeleteSpecPricing(ctx context.Context, specID int64, cycle domain.BillingCycle) error {
 	tag, err := r.db.Querier(ctx).Exec(ctx,
