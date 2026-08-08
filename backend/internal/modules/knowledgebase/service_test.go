@@ -450,6 +450,23 @@ func TestCreateArticleGeneratesSlugAndAudits(t *testing.T) {
 	assert.Equal(t, "kb_article", f.audit.Entries[0].Entity)
 }
 
+func TestCreateArticleSanitizesBody(t *testing.T) {
+	f := newFixture()
+	f.repo.GetCategoryByIDFn = func(ctx context.Context, id int64) (*domain.KBCategory, error) {
+		return &domain.KBCategory{ID: id}, nil
+	}
+	var created *domain.KBArticle
+	f.repo.CreateArticleFn = func(ctx context.Context, a *domain.KBArticle) error {
+		created = a
+		return nil
+	}
+	_, err := f.svc.CreateArticle(context.Background(), 7, articleInput(func(in *knowledgebase.ArticleInput) {
+		in.Body = `<p>ok</p><script>alert(document.cookie)</script>`
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "<p>ok</p>", created.Body)
+}
+
 func TestCreateArticleUnknownCategoryIsNotFound(t *testing.T) {
 	f := newFixture()
 	f.repo.GetCategoryByIDFn = func(ctx context.Context, id int64) (*domain.KBCategory, error) {
@@ -511,6 +528,23 @@ func TestUpdateArticlePatchesFields(t *testing.T) {
 	assert.Equal(t, 4, saved.Sort)
 	require.Len(t, f.audit.Entries, 1)
 	assert.Equal(t, "knowledgebase.article.update", f.audit.Entries[0].Action)
+}
+
+func TestUpdateArticleSanitizesBody(t *testing.T) {
+	f := newFixture()
+	f.repo.GetArticleByIDFn = func(ctx context.Context, id int64) (*domain.KBArticle, error) {
+		return &domain.KBArticle{ID: id, CategoryID: 1, Title: "Old", Slug: "old", Sort: 1}, nil
+	}
+	var saved *domain.KBArticle
+	f.repo.UpdateArticleFn = func(ctx context.Context, a *domain.KBArticle) error {
+		saved = a
+		return nil
+	}
+	_, err := f.svc.UpdateArticle(context.Background(), 1, 10, knowledgebase.ArticleUpdateInput{
+		Body: ptr(`<img src=x onerror=alert(1)>`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `<img src="x">`, saved.Body)
 }
 
 func TestUpdateArticleMovesCategory(t *testing.T) {

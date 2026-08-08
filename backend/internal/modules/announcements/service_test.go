@@ -185,6 +185,21 @@ func TestCreateGeneratesSlugAndAudits(t *testing.T) {
 	assert.Equal(t, int64(42), f.audit.Entries[0].ActorUserID)
 }
 
+func TestCreateSanitizesBody(t *testing.T) {
+	f := newFixture()
+	var created *domain.Announcement
+	f.repo.CreateFn = func(ctx context.Context, a *domain.Announcement) error {
+		created = a
+		return nil
+	}
+	_, err := f.svc.Create(context.Background(), 1, announcements.AnnouncementInput{
+		Title: "Payload",
+		Body:  `<p>hi</p><script>alert(document.cookie)</script>`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "<p>hi</p>", created.Body)
+}
+
 func TestCreateWithExplicitSlug(t *testing.T) {
 	f := newFixture()
 	var created *domain.Announcement
@@ -260,6 +275,23 @@ func TestUpdatePatchesFields(t *testing.T) {
 	assert.Equal(t, "New Title", got.Title)
 	require.Len(t, f.audit.Entries, 1)
 	assert.Equal(t, "announcements.update", f.audit.Entries[0].Action)
+}
+
+func TestUpdateSanitizesBody(t *testing.T) {
+	f := newFixture()
+	f.repo.GetByIDFn = func(ctx context.Context, id int64) (*domain.Announcement, error) {
+		return &domain.Announcement{ID: id, Title: "Old", Slug: "old", Body: "old body"}, nil
+	}
+	var saved *domain.Announcement
+	f.repo.UpdateFn = func(ctx context.Context, a *domain.Announcement) error {
+		saved = a
+		return nil
+	}
+	_, err := f.svc.Update(context.Background(), 1, 7, announcements.AnnouncementUpdateInput{
+		Body: ptr(`<img src=x onerror=alert(1)>`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `<img src="x">`, saved.Body)
 }
 
 func TestUpdatePublishingStampsPublishedAt(t *testing.T) {

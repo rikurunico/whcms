@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/tsdlamongan/whcms/backend/internal/domain"
+	"github.com/tsdlamongan/whcms/backend/internal/platform/htmlsanitize"
 	"github.com/tsdlamongan/whcms/backend/internal/platform/validate"
 	"github.com/tsdlamongan/whcms/backend/internal/ports"
 	"github.com/tsdlamongan/whcms/backend/pkg/apperr"
@@ -152,7 +153,7 @@ func (s *Service) Create(ctx context.Context, actorUserID int64, in Announcement
 	a := &domain.Announcement{
 		Title:     in.Title,
 		Slug:      slug,
-		Body:      in.Body,
+		Body:      htmlsanitize.HTML(in.Body),
 		Published: in.Published,
 	}
 	if actorUserID != 0 {
@@ -188,7 +189,7 @@ func (s *Service) Update(ctx context.Context, actorUserID, id int64, in Announce
 		a.Slug = *in.Slug
 	}
 	if in.Body != nil {
-		a.Body = *in.Body
+		a.Body = htmlsanitize.HTML(*in.Body)
 	}
 	if in.Published != nil {
 		a.Published = *in.Published

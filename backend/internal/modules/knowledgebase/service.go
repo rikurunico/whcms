@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/tsdlamongan/whcms/backend/internal/domain"
+	"github.com/tsdlamongan/whcms/backend/internal/platform/htmlsanitize"
 	"github.com/tsdlamongan/whcms/backend/internal/platform/validate"
 	"github.com/tsdlamongan/whcms/backend/internal/ports"
 	"github.com/tsdlamongan/whcms/backend/pkg/apperr"
@@ -307,7 +308,7 @@ func (s *Service) CreateArticle(ctx context.Context, actorUserID int64, in Artic
 		CategoryID: in.CategoryID,
 		Title:      in.Title,
 		Slug:       slug,
-		Body:       in.Body,
+		Body:       htmlsanitize.HTML(in.Body),
 		Published:  in.Published,
 		Sort:       in.Sort,
 	}
@@ -342,7 +343,7 @@ func (s *Service) UpdateArticle(ctx context.Context, actorUserID, id int64, in A
 		a.Slug = *in.Slug
 	}
 	if in.Body != nil {
-		a.Body = *in.Body
+		a.Body = htmlsanitize.HTML(*in.Body)
 	}
 	if in.Published != nil {
 		a.Published = *in.Published
