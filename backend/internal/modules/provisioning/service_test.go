@@ -1072,14 +1072,19 @@ func TestCancelServiceImmediate(t *testing.T) {
 		}
 		return []domain.Invoice{{ID: 102, Status: domain.InvoiceOverdue}}, 1, nil
 	}
-	f.invoices.GetItemsFn = func(_ context.Context, invoiceID int64) ([]domain.InvoiceItem, error) {
-		switch invoiceID {
-		case 100:
-			return []domain.InvoiceItem{{InvoiceID: 100, RelatedType: domain.RelatedServiceRenewal, RelatedID: &renewalID}}, nil
-		case 102:
-			return []domain.InvoiceItem{{InvoiceID: 102, RelatedType: domain.RelatedServiceRenewal, RelatedID: &renewalID}}, nil
+	f.invoices.GetItemsByInvoiceIDsFn = func(_ context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error) {
+		out := make(map[int64][]domain.InvoiceItem)
+		for _, invoiceID := range invoiceIDs {
+			switch invoiceID {
+			case 100:
+				out[invoiceID] = []domain.InvoiceItem{{InvoiceID: 100, RelatedType: domain.RelatedServiceRenewal, RelatedID: &renewalID}}
+			case 102:
+				out[invoiceID] = []domain.InvoiceItem{{InvoiceID: 102, RelatedType: domain.RelatedServiceRenewal, RelatedID: &renewalID}}
+			default:
+				out[invoiceID] = []domain.InvoiceItem{{InvoiceID: invoiceID, RelatedType: domain.RelatedOrderItem}}
+			}
 		}
-		return []domain.InvoiceItem{{InvoiceID: invoiceID, RelatedType: domain.RelatedOrderItem}}, nil
+		return out, nil
 	}
 	var cancelled []int64
 	f.invoices.UpdateStatusFn = func(_ context.Context, id int64, status domain.InvoiceStatus, paidAt *time.Time) error {

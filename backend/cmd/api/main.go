@@ -144,14 +144,20 @@ func run() error {
 		defer cancel()
 		checks := map[string]string{"postgres": "ok", "redis": "ok", "s3": "ok"}
 		healthy := true
+		// Dependency errors are logged server-side only - this endpoint is
+		// unauthenticated (reachable before RequireAuth runs), so the response
+		// body must never carry raw driver error text (hostnames, ports, etc).
 		if err := database.Ping(checkCtx); err != nil {
-			checks["postgres"], healthy = err.Error(), false
+			log.Error("readyz: postgres unhealthy", "error", err)
+			checks["postgres"], healthy = "down", false
 		}
 		if err := rdb.Ping(checkCtx).Err(); err != nil {
-			checks["redis"], healthy = err.Error(), false
+			log.Error("readyz: redis unhealthy", "error", err)
+			checks["redis"], healthy = "down", false
 		}
 		if err := s3.Healthy(checkCtx); err != nil {
-			checks["s3"], healthy = err.Error(), false
+			log.Error("readyz: s3 unhealthy", "error", err)
+			checks["s3"], healthy = "down", false
 		}
 		status := fiber.StatusOK
 		if !healthy {

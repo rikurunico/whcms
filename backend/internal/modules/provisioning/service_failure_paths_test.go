@@ -387,7 +387,7 @@ func TestCancelServiceInvoiceErrors(t *testing.T) {
 	f.invoices.ListByClientFn = func(context.Context, int64, ports.ListParams) ([]domain.Invoice, int64, error) {
 		return []domain.Invoice{{ID: 100, Status: domain.InvoiceUnpaid}}, 1, nil
 	}
-	f.invoices.GetItemsFn = func(context.Context, int64) ([]domain.InvoiceItem, error) {
+	f.invoices.GetItemsByInvoiceIDsFn = func(context.Context, []int64) (map[int64][]domain.InvoiceItem, error) {
 		return nil, errors.New("db down")
 	}
 	_, err = f.svc.CancelService(context.Background(), 10, 7, 42, CancelServiceInput{Mode: CancelModeImmediate})
@@ -399,8 +399,8 @@ func TestCancelServiceInvoiceErrors(t *testing.T) {
 	f.invoices.ListByClientFn = func(context.Context, int64, ports.ListParams) ([]domain.Invoice, int64, error) {
 		return []domain.Invoice{{ID: 100, Status: domain.InvoiceUnpaid}}, 1, nil
 	}
-	f.invoices.GetItemsFn = func(context.Context, int64) ([]domain.InvoiceItem, error) {
-		return []domain.InvoiceItem{{RelatedType: domain.RelatedServiceRenewal, RelatedID: &rid}}, nil
+	f.invoices.GetItemsByInvoiceIDsFn = func(context.Context, []int64) (map[int64][]domain.InvoiceItem, error) {
+		return map[int64][]domain.InvoiceItem{100: {{RelatedType: domain.RelatedServiceRenewal, RelatedID: &rid}}}, nil
 	}
 	f.invoices.UpdateStatusFn = func(context.Context, int64, domain.InvoiceStatus, *time.Time) error {
 		return errors.New("db down")

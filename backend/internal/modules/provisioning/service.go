@@ -140,6 +140,7 @@ type UserStore interface {
 // (subset of ports.InvoiceRepo).
 type InvoiceStore interface {
 	GetItems(ctx context.Context, invoiceID int64) ([]domain.InvoiceItem, error)
+	GetItemsByInvoiceIDs(ctx context.Context, invoiceIDs []int64) (map[int64][]domain.InvoiceItem, error)
 	ListByClient(ctx context.Context, clientID int64, p ports.ListParams) ([]domain.Invoice, int64, error)
 	UpdateStatus(ctx context.Context, id int64, status domain.InvoiceStatus, paidAt *time.Time) error
 }
@@ -1078,12 +1079,19 @@ func (s *Service) cancelOpenRenewalInvoices(ctx context.Context, svc *domain.Ser
 		if err != nil {
 			return wrap(err)
 		}
+		if len(invoices) == 0 {
+			continue
+		}
+		ids := make([]int64, len(invoices))
+		for i, inv := range invoices {
+			ids[i] = inv.ID
+		}
+		itemsByInvoice, err := s.d.Invoices.GetItemsByInvoiceIDs(ctx, ids)
+		if err != nil {
+			return wrap(err)
+		}
 		for _, inv := range invoices {
-			items, err := s.d.Invoices.GetItems(ctx, inv.ID)
-			if err != nil {
-				return wrap(err)
-			}
-			for _, item := range items {
+			for _, item := range itemsByInvoice[inv.ID] {
 				if item.RelatedType == domain.RelatedServiceRenewal &&
 					item.RelatedID != nil && *item.RelatedID == svc.ID {
 					if _, err := domain.TransitionInvoice(inv.Status, domain.InvoiceCancelled); err != nil {
