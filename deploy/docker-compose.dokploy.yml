@@ -136,7 +136,11 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
+      # 127.0.0.1, not localhost: Fiber listens on tcp4 only while busybox wget
+      # resolves localhost to ::1 first and gets connection-refused — which
+      # would keep this container "starting" forever and block the worker and
+      # frontend that wait on it.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -191,7 +195,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
