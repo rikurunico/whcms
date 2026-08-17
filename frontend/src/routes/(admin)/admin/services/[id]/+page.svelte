@@ -11,6 +11,11 @@
 
 	const service = $derived(data.service);
 
+	const CANCELLATION_MODE_LABEL: Record<string, string> = {
+		immediate: 'immediate',
+		end_of_term: 'end-of-term'
+	};
+
 	// Confirm-only dialogs.
 	let provisionOpen = $state(false);
 	let unsuspendOpen = $state(false);
@@ -111,9 +116,10 @@
 		};
 	}
 
-	// Custom-spec (configurable) products aren't priced/applied correctly by
-	// Upgrade (see the backend guard) - keep them out of this picker so
-	// there's no confusing dead-end; Change Package still lists everything.
+	// The backend Upgrade endpoint accepts spec selections for custom-spec
+	// (configurable) products, but this admin form has no spec-knob UI yet -
+	// keep them out of this picker so there's no dead-end (the client-area
+	// upgrade flow covers them); Change Package still lists everything.
 	const upgradeableProducts = $derived(data.products.filter((p) => !p.configurable));
 
 	const CYCLE_LABELS: Record<string, string> = {
@@ -166,6 +172,23 @@
 		<a
 			href={`/admin/invoices/${service.pending_upgrade.invoice_id}`}
 			style="font-weight:600;text-decoration:underline;margin-left:4px">View Invoice</a
+		>
+	</div>
+{/if}
+
+{#if service.pending_cancellation}
+	<div class="hp-alert-yellow" data-testid="service-pending-cancellation-banner">
+		<i class="fas fa-info-circle" style="margin-right:8px"></i>
+		{#if service.pending_cancellation.mode === 'immediate'}
+			The client's immediate cancellation is being processed - no action needed, it will complete
+			automatically once the worker picks it up.
+		{:else}
+			A client cancellation request ({CANCELLATION_MODE_LABEL[service.pending_cancellation.mode] ??
+				service.pending_cancellation.mode}) is pending review.
+		{/if}
+		<a
+			href="/admin/services/cancellation-requests"
+			style="font-weight:600;text-decoration:underline;margin-left:4px">Review Requests</a
 		>
 	</div>
 {/if}
@@ -640,7 +663,7 @@
 					{/each}
 				</select>
 				<div class="hp-help" style="margin-top:3px">
-					Custom-spec products aren't listed — Upgrade doesn't support spec selection yet.
+					Custom-spec products aren't listed here — clients configure those via the client-area upgrade flow.
 				</div>
 			</div>
 		</div>

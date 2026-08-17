@@ -37,37 +37,40 @@ func (s fakeMW) RequireClient() fiber.Handler           { return pass }
 
 // fakeService implements ProvisioningService with function fields.
 type fakeService struct {
-	listServices       func(ctx context.Context, clientID int64, p ports.ListParams) ([]domain.Service, int64, error)
-	getService         func(ctx context.Context, clientID, serviceID int64) (*domain.Service, error)
-	changePassword     func(ctx context.Context, actorUserID, clientID, serviceID int64, password string) error
-	sso                func(ctx context.Context, actorUserID, clientID, serviceID int64) (string, error)
-	cancelService      func(ctx context.Context, actorUserID, clientID, serviceID int64, in CancelServiceInput) (*domain.Service, error)
-	upgradeService     func(ctx context.Context, actorUserID, clientID, serviceID int64, in UpgradeServiceInput) (*UpgradeResult, error)
-	adminAction        func(ctx context.Context, actorUserID, serviceID int64, action, reason string, async bool) error
-	adminChangePackage func(ctx context.Context, actorUserID, serviceID int64, in AdminChangePackageInput) error
-	adminUpdateService func(ctx context.Context, actorUserID, serviceID int64, in AdminUpdateServiceInput) (*domain.Service, error)
-	listServers        func(ctx context.Context, p ports.ListParams) ([]domain.Server, int64, error)
-	getServer          func(ctx context.Context, id int64) (*domain.Server, error)
-	createServer       func(ctx context.Context, actorUserID int64, in ServerInput) (*domain.Server, error)
-	updateServer       func(ctx context.Context, actorUserID, id int64, in ServerInput) (*domain.Server, error)
-	deleteServer       func(ctx context.Context, actorUserID, id int64) error
-	testConnection     func(ctx context.Context, in TestConnectionInput) (*TestConnectionResult, error)
-	listGroups         func(ctx context.Context) ([]domain.ServerGroup, error)
-	getGroup           func(ctx context.Context, id int64) (*domain.ServerGroup, error)
-	createGroup        func(ctx context.Context, actorUserID int64, in ServerGroupInput) (*domain.ServerGroup, error)
-	updateGroup        func(ctx context.Context, actorUserID, id int64, in ServerGroupInput) (*domain.ServerGroup, error)
-	deleteGroup        func(ctx context.Context, actorUserID, id int64) error
-	listPackages       func(ctx context.Context, groupID int64) (*PackageListResult, error)
+	listServices              func(ctx context.Context, clientID int64, p ports.ListParams) ([]ServiceView, int64, error)
+	getService                func(ctx context.Context, clientID, serviceID int64) (*ServiceView, error)
+	changePassword            func(ctx context.Context, actorUserID, clientID, serviceID int64, password string) error
+	sso                       func(ctx context.Context, actorUserID, clientID, serviceID int64) (string, error)
+	cancelService             func(ctx context.Context, actorUserID, clientID, serviceID int64, in CancelServiceInput) (*domain.Service, error)
+	upgradeService            func(ctx context.Context, actorUserID, clientID, serviceID int64, in UpgradeServiceInput) (*UpgradeResult, error)
+	adminAction               func(ctx context.Context, actorUserID, serviceID int64, action, reason string, async bool) error
+	adminChangePackage        func(ctx context.Context, actorUserID, serviceID int64, in AdminChangePackageInput) error
+	adminUpdateService        func(ctx context.Context, actorUserID, serviceID int64, in AdminUpdateServiceInput) (*domain.Service, error)
+	listCancellationRequests  func(ctx context.Context, p ports.ListParams) ([]CancellationRequestView, int64, error)
+	acceptCancellationRequest func(ctx context.Context, actorUserID, requestID int64) error
+	rejectCancellationRequest func(ctx context.Context, actorUserID, requestID int64) error
+	listServers               func(ctx context.Context, p ports.ListParams) ([]domain.Server, int64, error)
+	getServer                 func(ctx context.Context, id int64) (*domain.Server, error)
+	createServer              func(ctx context.Context, actorUserID int64, in ServerInput) (*domain.Server, error)
+	updateServer              func(ctx context.Context, actorUserID, id int64, in ServerInput) (*domain.Server, error)
+	deleteServer              func(ctx context.Context, actorUserID, id int64) error
+	testConnection            func(ctx context.Context, in TestConnectionInput) (*TestConnectionResult, error)
+	listGroups                func(ctx context.Context) ([]domain.ServerGroup, error)
+	getGroup                  func(ctx context.Context, id int64) (*domain.ServerGroup, error)
+	createGroup               func(ctx context.Context, actorUserID int64, in ServerGroupInput) (*domain.ServerGroup, error)
+	updateGroup               func(ctx context.Context, actorUserID, id int64, in ServerGroupInput) (*domain.ServerGroup, error)
+	deleteGroup               func(ctx context.Context, actorUserID, id int64) error
+	listPackages              func(ctx context.Context, groupID int64) (*PackageListResult, error)
 }
 
-func (f *fakeService) ListServices(ctx context.Context, clientID int64, p ports.ListParams) ([]domain.Service, int64, error) {
+func (f *fakeService) ListServices(ctx context.Context, clientID int64, p ports.ListParams) ([]ServiceView, int64, error) {
 	if f.listServices != nil {
 		return f.listServices(ctx, clientID, p)
 	}
 	return nil, 0, nil
 }
 
-func (f *fakeService) GetService(ctx context.Context, clientID, serviceID int64) (*domain.Service, error) {
+func (f *fakeService) GetService(ctx context.Context, clientID, serviceID int64) (*ServiceView, error) {
 	if f.getService != nil {
 		return f.getService(ctx, clientID, serviceID)
 	}
@@ -121,6 +124,27 @@ func (f *fakeService) AdminUpdateService(ctx context.Context, actorUserID, servi
 		return f.adminUpdateService(ctx, actorUserID, serviceID, in)
 	}
 	return nil, apperr.NotFound("service")
+}
+
+func (f *fakeService) ListCancellationRequests(ctx context.Context, p ports.ListParams) ([]CancellationRequestView, int64, error) {
+	if f.listCancellationRequests != nil {
+		return f.listCancellationRequests(ctx, p)
+	}
+	return nil, 0, nil
+}
+
+func (f *fakeService) AcceptCancellationRequest(ctx context.Context, actorUserID, requestID int64) error {
+	if f.acceptCancellationRequest != nil {
+		return f.acceptCancellationRequest(ctx, actorUserID, requestID)
+	}
+	return nil
+}
+
+func (f *fakeService) RejectCancellationRequest(ctx context.Context, actorUserID, requestID int64) error {
+	if f.rejectCancellationRequest != nil {
+		return f.rejectCancellationRequest(ctx, actorUserID, requestID)
+	}
+	return nil
 }
 
 func (f *fakeService) ListServers(ctx context.Context, p ports.ListParams) ([]domain.Server, int64, error) {
@@ -235,11 +259,11 @@ func decodeEnvelope(t *testing.T, body io.Reader) httpx.Envelope {
 
 func TestHandlerListMyServices(t *testing.T) {
 	fs := &fakeService{
-		listServices: func(_ context.Context, clientID int64, p ports.ListParams) ([]domain.Service, int64, error) {
+		listServices: func(_ context.Context, clientID int64, p ports.ListParams) ([]ServiceView, int64, error) {
 			assert.Equal(t, int64(7), clientID)
 			assert.Equal(t, 2, p.Page)
 			assert.Equal(t, "active", p.Status)
-			return []domain.Service{{ID: 1, ClientID: 7}}, 26, nil
+			return []ServiceView{{Service: domain.Service{ID: 1, ClientID: 7}, ProductName: "Hosting Basic"}}, 26, nil
 		},
 	}
 	app := newApp(fs, clientIdentity())
@@ -255,10 +279,10 @@ func TestHandlerListMyServices(t *testing.T) {
 
 func TestHandlerGetMyService(t *testing.T) {
 	fs := &fakeService{
-		getService: func(_ context.Context, clientID, serviceID int64) (*domain.Service, error) {
+		getService: func(_ context.Context, clientID, serviceID int64) (*ServiceView, error) {
 			assert.Equal(t, int64(7), clientID)
 			assert.Equal(t, int64(42), serviceID)
-			return &domain.Service{ID: 42, ClientID: 7}, nil
+			return &ServiceView{Service: domain.Service{ID: 42, ClientID: 7}, ProductName: "Hosting Basic"}, nil
 		},
 	}
 	app := newApp(fs, clientIdentity())
@@ -273,7 +297,7 @@ func TestHandlerGetMyService(t *testing.T) {
 	assert.Equal(t, 422, resp.StatusCode)
 
 	// Not found -> 404.
-	fs.getService = func(context.Context, int64, int64) (*domain.Service, error) {
+	fs.getService = func(context.Context, int64, int64) (*ServiceView, error) {
 		return nil, apperr.NotFound("service")
 	}
 	resp, err = app.Test(httptest.NewRequest("GET", "/api/v1/services/43", nil))
@@ -614,13 +638,13 @@ func TestHandlerListPackages(t *testing.T) {
 
 func TestHandlerAdminListAndGetService(t *testing.T) {
 	fs := &fakeService{
-		listServices: func(_ context.Context, clientID int64, p ports.ListParams) ([]domain.Service, int64, error) {
+		listServices: func(_ context.Context, clientID int64, p ports.ListParams) ([]ServiceView, int64, error) {
 			assert.Zero(t, clientID) // admin sees everything
-			return []domain.Service{{ID: 1}}, 1, nil
+			return []ServiceView{{Service: domain.Service{ID: 1}}}, 1, nil
 		},
-		getService: func(_ context.Context, clientID, serviceID int64) (*domain.Service, error) {
+		getService: func(_ context.Context, clientID, serviceID int64) (*ServiceView, error) {
 			assert.Zero(t, clientID)
-			return &domain.Service{ID: serviceID}, nil
+			return &ServiceView{Service: domain.Service{ID: serviceID}}, nil
 		},
 	}
 	app := newApp(fs, adminIdentity())
@@ -636,6 +660,64 @@ func TestHandlerAdminListAndGetService(t *testing.T) {
 	resp, err = app.Test(httptest.NewRequest("GET", "/api/v1/admin/services/x", nil))
 	require.NoError(t, err)
 	assert.Equal(t, 422, resp.StatusCode)
+}
+
+func TestHandlerListCancellationRequests(t *testing.T) {
+	fs := &fakeService{
+		listCancellationRequests: func(_ context.Context, p ports.ListParams) ([]CancellationRequestView, int64, error) {
+			assert.Equal(t, "pending", p.Status)
+			return []CancellationRequestView{{
+				CancellationRequest: domain.CancellationRequest{ID: 1, Status: domain.CancellationPending},
+				ServiceDomain:       "example.com",
+			}}, 1, nil
+		},
+	}
+	app := newApp(fs, adminIdentity())
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/api/v1/admin/services/cancellation-requests?status=pending", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	env := decodeEnvelope(t, resp.Body)
+	require.NotNil(t, env.Meta)
+	assert.Equal(t, int64(1), env.Meta.Total)
+}
+
+func TestHandlerAcceptRejectCancellationRequest(t *testing.T) {
+	var acceptedID, rejectedID int64
+	fs := &fakeService{
+		acceptCancellationRequest: func(_ context.Context, actorUserID, requestID int64) error {
+			assert.Equal(t, int64(1), actorUserID)
+			acceptedID = requestID
+			return nil
+		},
+		rejectCancellationRequest: func(_ context.Context, actorUserID, requestID int64) error {
+			assert.Equal(t, int64(1), actorUserID)
+			rejectedID = requestID
+			return nil
+		},
+	}
+	app := newApp(fs, adminIdentity())
+
+	resp, err := app.Test(httptest.NewRequest("POST", "/api/v1/admin/services/cancellation-requests/5/accept", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, int64(5), acceptedID)
+
+	resp, err = app.Test(httptest.NewRequest("POST", "/api/v1/admin/services/cancellation-requests/9/reject", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, int64(9), rejectedID)
+
+	resp, err = app.Test(httptest.NewRequest("POST", "/api/v1/admin/services/cancellation-requests/x/accept", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 422, resp.StatusCode)
+
+	fs.acceptCancellationRequest = func(context.Context, int64, int64) error {
+		return apperr.Conflict("already decided")
+	}
+	resp, err = app.Test(httptest.NewRequest("POST", "/api/v1/admin/services/cancellation-requests/5/accept", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 409, resp.StatusCode)
 }
 
 func TestHandlerAdminUpdateService(t *testing.T) {
@@ -723,7 +805,7 @@ func TestHandlerBadBodies(t *testing.T) {
 
 func TestHandlerErrorMapping(t *testing.T) {
 	fs := &fakeService{
-		getService: func(context.Context, int64, int64) (*domain.Service, error) {
+		getService: func(context.Context, int64, int64) (*ServiceView, error) {
 			return nil, apperr.Conflict("nope")
 		},
 	}

@@ -339,11 +339,49 @@ type Service struct {
 
 // ServiceUpgrade is the JSON payload stored in services.pending_upgrade while
 // an upgrade/downgrade awaits payment (invoice item related_type=service_upgrade).
+// Specs carries the customer's dynamic-spec choices when the target product is
+// configurable; ApplyUpgrade copies it into panel_meta[chosen_specs] so the
+// panel package is rebuilt from the new configuration.
 type ServiceUpgrade struct {
-	ProductID       int64        `json:"product_id"`
-	Cycle           BillingCycle `json:"cycle"`
-	RecurringAmount int64        `json:"recurring_amount"`
-	InvoiceID       int64        `json:"invoice_id"`
+	ProductID       int64         `json:"product_id"`
+	Cycle           BillingCycle  `json:"cycle"`
+	RecurringAmount int64         `json:"recurring_amount"`
+	InvoiceID       int64         `json:"invoice_id"`
+	Specs           []UpgradeSpec `json:"specs,omitempty"`
+}
+
+// UpgradeSpec is one resolved, priced dynamic-spec choice inside a pending
+// ServiceUpgrade. Its JSON shape mirrors the chosen_specs snapshot order
+// activation writes to services.panel_meta (orders.SpecSelection), so
+// provisioning reads both through the same decoder. Qty is in the spec unit;
+// UnlimitedQty (-1) marks an unlimited choice. Amount is the per-cycle IDR the
+// choice adds on top of the product's base price.
+type UpgradeSpec struct {
+	Key          string `json:"key"`
+	ProvisionKey string `json:"provision_key"`
+	Unit         string `json:"unit"`
+	Qty          int64  `json:"qty"`
+	Unlimited    bool   `json:"unlimited,omitempty"`
+	Amount       int64  `json:"amount"`
+}
+
+// CancellationRequest is a client-submitted request to cancel a service.
+// Immediate-mode requests are recorded already CancellationAutoProcessed (no
+// admin action needed - the cancellation itself already ran synchronously);
+// end_of_term requests start CancellationPending and only take effect
+// (panel_meta.cancel_at_period_end set) once an admin accepts them.
+type CancellationRequest struct {
+	ID          int64                     `json:"id"`
+	ServiceID   int64                     `json:"service_id"`
+	ClientID    int64                     `json:"client_id"`
+	Mode        string                    `json:"mode"` // "immediate" | "end_of_term"
+	Reason      string                    `json:"reason"`
+	Status      CancellationRequestStatus `json:"status"`
+	RequestedAt time.Time                 `json:"requested_at"`
+	DecidedAt   *time.Time                `json:"decided_at"`
+	DecidedBy   *int64                    `json:"decided_by"`
+	CreatedAt   time.Time                 `json:"created_at"`
+	UpdatedAt   time.Time                 `json:"updated_at"`
 }
 
 // Registrar is a domain registrar configuration row. ResellerID/APIKeyEnc are

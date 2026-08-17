@@ -11,15 +11,18 @@
 //	POST   /services/:id/change-password              sync panel password change [client]
 //	GET    /services/:id/sso                          one-time panel login URL   [client]
 //	POST   /services/:id/cancel                       {mode: immediate|end_of_term} [client]
-//	POST   /services/:id/upgrade                      {product_id, cycle} prorated [client]
+//	POST   /services/:id/upgrade                      {product_id, cycle, specs?} prorated [client]
 //	GET    /admin/services                                                        [perm: services]
+//	GET    /admin/services/cancellation-requests      ?status&page&per_page       [perm: services]
+//	POST   /admin/services/cancellation-requests/:id/accept                      [perm: services]
+//	POST   /admin/services/cancellation-requests/:id/reject                      [perm: services]
 //	GET    /admin/services/:id                                                    [perm: services]
 //	POST   /admin/services/:id/create                 {async?}                    [perm: services]
 //	POST   /admin/services/:id/suspend                {reason?, async?}           [perm: services]
 //	POST   /admin/services/:id/unsuspend              {async?}                    [perm: services]
 //	POST   /admin/services/:id/terminate              {async?}                    [perm: services]
 //	POST   /admin/services/:id/change-package         {product_id?, async?}       [perm: services]
-//	POST   /admin/services/:id/upgrade                {product_id, cycle} prorated [perm: services]
+//	POST   /admin/services/:id/upgrade                {product_id, cycle, specs?} prorated [perm: services]
 //	POST   /admin/services/:id/change-password        {password}                  [perm: services]
 //	GET    /admin/servers                                                         [perm: servers]
 //	POST   /admin/servers                                                         [perm: servers]
@@ -124,6 +127,7 @@ type ProductStore interface {
 	GetByID(ctx context.Context, id int64) (*domain.Product, error)
 	GetPricing(ctx context.Context, productID int64, cycle domain.BillingCycle) (*domain.ProductPricing, error)
 	ListSpecs(ctx context.Context, productID int64) ([]domain.ProductSpec, error)
+	GetSpecPricing(ctx context.Context, specID int64, cycle domain.BillingCycle) (*domain.ProductSpecPricing, error)
 }
 
 // ClientStore reads client profiles (subset of ports.ClientRepo).
@@ -171,6 +175,8 @@ type Deps struct {
 	Tx       ports.TxManager
 	Audit    ports.AuditLogger
 	Clock    ports.Clock
+
+	CancellationRequests ports.CancellationRequestRepo
 }
 
 // Service implements the provisioning use-cases.
@@ -676,6 +682,7 @@ func (s *Service) ProvisionTerminate(ctx context.Context, serviceID int64) error
 			return wrap(err)
 		}
 		s.d.Audit.Log(ctx, 0, "service.cancel", "service", svc.ID, nil, nil)
+		s.resolvePendingCancellation(ctx, svc.ID)
 		return nil
 	}
 	if _, err := domain.TransitionService(svc.Status, domain.ServiceTerminated); err != nil {
@@ -715,12 +722,35 @@ func (s *Service) ProvisionTerminate(ctx context.Context, serviceID int64) error
 
 	s.notifyService(ctx, svc, "service_terminated", map[string]any{"ServiceName": svc.Domain})
 	s.d.Audit.Log(ctx, 0, "service.terminate", "service", svc.ID, nil, nil)
+	s.resolvePendingCancellation(ctx, svc.ID)
 	return nil
+}
+
+// resolvePendingCancellation marks the service's pending cancellation
+// request (if any) CancellationAutoProcessed now that termination has
+// actually completed - closing the window where a client's immediate-mode
+// request stays pending (and so blocks a duplicate submission via the "one
+// pending request per service" guard in CancelService) for as long as the
+// job sits in the queue. Best-effort: a lookup/update failure here must not
+// fail the termination itself, which already succeeded.
+func (s *Service) resolvePendingCancellation(ctx context.Context, serviceID int64) {
+	cr, err := s.d.CancellationRequests.GetPendingByService(ctx, serviceID)
+	if err != nil || cr == nil {
+		return
+	}
+	now := s.d.Clock.Now().UTC()
+	cr.Status = domain.CancellationAutoProcessed
+	cr.DecidedAt = &now
+	_ = s.d.CancellationRequests.Update(ctx, cr)
 }
 
 // ProvisionChangePackage pushes the service's current product package to the
 // control panel (used after ApplyUpgrade and by the admin change-package
-// action).
+// action). For configurable (custom-spec) products the per-service package is
+// first rebuilt from the chosen_specs snapshot in panel_meta (EnsurePackage,
+// same as ProvisionCreate), then the account is moved onto it; a dynamic
+// package left behind with no remaining services is deleted (same rule as
+// terminate) so resizes don't strand near-duplicate spec packages.
 func (s *Service) ProvisionChangePackage(ctx context.Context, serviceID int64) error {
 	svc, err := s.d.Services.GetByID(ctx, serviceID)
 	if err != nil {
@@ -735,14 +765,59 @@ func (s *Service) ProvisionChangePackage(ctx context.Context, serviceID int64) e
 	if err != nil {
 		return err
 	}
+	packageName := product.PackageName
 	if hasPanel {
-		if err := mod.ChangePackage(ctx, cfg, svc.Username, product.PackageName); err != nil {
+		meta := metaMap(svc.PanelMeta)
+		oldPkg, _ := meta[domain.PanelMetaPackageName].(string)
+
+		if product.Configurable {
+			server, err := s.d.Servers.GetServerByID(ctx, *svc.ServerID)
+			if err != nil {
+				return wrap(err)
+			}
+			pkgSpec, err := s.buildPackageSpec(ctx, svc, product, server.PackagePrefix)
+			if err != nil {
+				return err
+			}
+			if err := mod.EnsurePackage(ctx, cfg, pkgSpec); err != nil {
+				return wrap(err) // asynq retries
+			}
+			packageName = pkgSpec.Name
+			meta[domain.PanelMetaPackageName] = pkgSpec.Name
+			meta[domain.PanelMetaLimits] = pkgSpec.Limits
+		} else {
+			// Moving (back) to a flat product: the dynamic-package bookkeeping
+			// no longer describes this service.
+			delete(meta, domain.PanelMetaPackageName)
+			delete(meta, domain.PanelMetaLimits)
+		}
+
+		if err := mod.ChangePackage(ctx, cfg, svc.Username, packageName); err != nil {
 			return wrap(err)
+		}
+		svc.PanelMeta = marshalMeta(meta)
+		if err := s.d.Services.Update(ctx, svc); err != nil {
+			return wrap(err)
+		}
+
+		// Dynamic packages may be shared by other services resolving to the
+		// same limits - only delete the one we moved away from once no sibling
+		// on this server still references it.
+		if oldPkg != "" && oldPkg != packageName {
+			others, err := s.d.Services.CountByServerAndPackage(ctx, *svc.ServerID, oldPkg, svc.ID)
+			if err != nil {
+				return wrap(err)
+			}
+			if others == 0 {
+				if err := mod.DeletePackage(ctx, cfg, oldPkg); err != nil {
+					return wrap(err)
+				}
+			}
 		}
 	}
 
 	s.d.Audit.Log(ctx, 0, "service.change_package", "service", svc.ID, nil,
-		map[string]any{"package": product.PackageName})
+		map[string]any{"package": packageName})
 	return nil
 }
 
@@ -829,6 +904,10 @@ func (s *Service) ApplyUpgrade(ctx context.Context, serviceID int64) error {
 		svc.BillingCycle = up.Cycle
 		svc.RecurringAmount = up.RecurringAmount
 		svc.PendingUpgrade = nil
+		// Rebind the chosen-specs snapshot to the new configuration so the
+		// enqueued package change rebuilds the panel package from it (and a
+		// move to a flat product drops the stale snapshot).
+		svc.PanelMeta = panelMetaWithChosenSpecs(svc.PanelMeta, up.Specs)
 		return s.d.Services.Update(txCtx, svc)
 	})
 	if err != nil {
@@ -906,8 +985,9 @@ func (s *Service) AutoTerminate(ctx context.Context) (int, error) {
 
 // Client use-cases
 
-// ListServices lists one client's services (clientID 0 = all, admin).
-func (s *Service) ListServices(ctx context.Context, clientID int64, p ports.ListParams) ([]domain.Service, int64, error) {
+// ListServices lists one client's services (clientID 0 = all, admin), with
+// product/server display names attached.
+func (s *Service) ListServices(ctx context.Context, clientID int64, p ports.ListParams) ([]ServiceView, int64, error) {
 	var (
 		list  []domain.Service
 		total int64
@@ -921,12 +1001,63 @@ func (s *Service) ListServices(ctx context.Context, clientID int64, p ports.List
 	if err != nil {
 		return nil, 0, wrap(err)
 	}
-	return list, total, nil
+	return s.serviceViews(ctx, list), total, nil
 }
 
-// GetService returns one service with ownership enforcement (clientID 0 = admin).
-func (s *Service) GetService(ctx context.Context, clientID, serviceID int64) (*domain.Service, error) {
-	return s.getOwned(ctx, clientID, serviceID)
+// GetService returns one service with ownership enforcement (clientID 0 =
+// admin), with product/server display names and its pending cancellation
+// request (if any) attached. The bulk ListServices path skips the pending-
+// cancellation lookup to avoid an extra query per row.
+func (s *Service) GetService(ctx context.Context, clientID, serviceID int64) (*ServiceView, error) {
+	svc, err := s.getOwned(ctx, clientID, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	views := s.serviceViews(ctx, []domain.Service{*svc})
+	view := &views[0]
+	pending, err := s.d.CancellationRequests.GetPendingByService(ctx, svc.ID)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	view.PendingCancellation = pending
+	return view, nil
+}
+
+// serviceViews attaches product/server display names to service rows.
+// Lookups are memoized per call (a page of rows references few distinct
+// products/servers) and best-effort: an unresolvable reference (deleted
+// product, missing server) just leaves the name empty - the UI falls back to
+// "#<id>" - rather than failing the read.
+func (s *Service) serviceViews(ctx context.Context, list []domain.Service) []ServiceView {
+	productNames := map[int64]string{}
+	type serverInfo struct{ name, hostname string }
+	servers := map[int64]serverInfo{}
+
+	views := make([]ServiceView, 0, len(list))
+	for _, svc := range list {
+		v := ServiceView{Service: svc}
+		if _, ok := productNames[svc.ProductID]; !ok {
+			name := ""
+			if p, err := s.d.Products.GetByID(ctx, svc.ProductID); err == nil && p != nil {
+				name = p.Name
+			}
+			productNames[svc.ProductID] = name
+		}
+		v.ProductName = productNames[svc.ProductID]
+		if svc.ServerID != nil {
+			if _, ok := servers[*svc.ServerID]; !ok {
+				info := serverInfo{}
+				if srv, err := s.d.Servers.GetServerByID(ctx, *svc.ServerID); err == nil && srv != nil {
+					info = serverInfo{name: srv.Name, hostname: srv.Hostname}
+				}
+				servers[*svc.ServerID] = info
+			}
+			v.ServerName = servers[*svc.ServerID].name
+			v.ServerHostname = servers[*svc.ServerID].hostname
+		}
+		views = append(views, v)
+	}
+	return views
 }
 
 // ChangePassword synchronously changes the control-panel password and stores
@@ -1026,10 +1157,20 @@ func (s *Service) SSO(ctx context.Context, actorUserID, clientID, serviceID int6
 	return url, nil
 }
 
-// CancelService handles a client cancellation request. immediate: enqueue
-// termination and cancel open (unpaid/overdue) renewal invoices of the
-// service; end_of_term: flag cancel_at_period_end in panel_meta (honoured by
-// AutoTerminate and renewal invoice generation).
+// CancelService handles a client cancellation request. immediate: cancel open
+// (unpaid/overdue) renewal invoices and enqueue termination right away - no
+// admin approval gate - but the request still starts CancellationPending
+// (resolved to CancellationAutoProcessed by ProvisionTerminate once the
+// worker actually completes it), NOT auto_processed at submission time: the
+// termination is asynchronous, so marking it done immediately would let the
+// "one pending request per service" guard below miss a second immediate
+// submission for as long as the job sits in the queue (the service's own
+// status stays active/suspended the whole time too - only ProvisionTerminate
+// flips it). end_of_term: create a CancellationPending request and stop
+// there - panel_meta.cancel_at_period_end (honoured by AutoTerminate and
+// renewal invoice generation) is only set once an admin accepts it via
+// AcceptCancellationRequest. A service may have at most one pending request
+// at a time.
 func (s *Service) CancelService(ctx context.Context, actorUserID, clientID, serviceID int64, in CancelServiceInput) (*domain.Service, error) {
 	if err := s.val.Struct(in); err != nil {
 		return nil, err
@@ -1042,6 +1183,15 @@ func (s *Service) CancelService(ctx context.Context, actorUserID, clientID, serv
 		!(svc.Status == domain.ServicePending && in.Mode == CancelModeImmediate) {
 		return nil, apperr.Conflict("service cannot be cancelled in its current status")
 	}
+	pending, err := s.d.CancellationRequests.GetPendingByService(ctx, svc.ID)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if pending != nil {
+		return nil, apperr.Conflict("a cancellation request is already pending for this service")
+	}
+
+	cr := &domain.CancellationRequest{ServiceID: svc.ID, ClientID: svc.ClientID, Mode: in.Mode, Reason: in.Reason}
 
 	switch in.Mode {
 	case CancelModeImmediate:
@@ -1053,21 +1203,138 @@ func (s *Service) CancelService(ctx context.Context, actorUserID, clientID, serv
 			ports.WithQueue("critical")); err != nil {
 			return nil, wrap(err)
 		}
+		cr.Status = domain.CancellationPending
 	case CancelModeEndOfTerm:
-		meta := metaMap(svc.PanelMeta)
-		meta[metaCancelAtPeriodEnd] = true
-		svc.PanelMeta = marshalMeta(meta)
-		if err := s.d.Services.Update(ctx, svc); err != nil {
-			return nil, wrap(err)
-		}
+		cr.Status = domain.CancellationPending
 	default:
 		return nil, apperr.Validation("invalid cancellation mode",
 			apperr.FieldError{Field: "mode", Message: "must be immediate or end_of_term"})
 	}
 
+	if err := s.d.CancellationRequests.Create(ctx, cr); err != nil {
+		return nil, wrap(err)
+	}
+
 	s.d.Audit.Log(ctx, actorUserID, "service.cancel_request", "service", svc.ID, nil,
-		map[string]any{"mode": in.Mode, "reason": in.Reason})
+		map[string]any{"mode": in.Mode, "reason": in.Reason, "request_id": cr.ID})
 	return svc, nil
+}
+
+// ListCancellationRequests returns cancellation requests (optionally filtered
+// by p.Status/ServiceID) with service/client display names attached, for the
+// admin cancellation-requests list.
+func (s *Service) ListCancellationRequests(ctx context.Context, p ports.ListParams) ([]CancellationRequestView, int64, error) {
+	rows, total, err := s.d.CancellationRequests.List(ctx, p)
+	if err != nil {
+		return nil, 0, wrap(err)
+	}
+	if len(rows) == 0 {
+		return nil, total, nil
+	}
+
+	serviceIDs := make([]int64, 0, len(rows))
+	seen := map[int64]bool{}
+	for _, r := range rows {
+		if !seen[r.ServiceID] {
+			seen[r.ServiceID] = true
+			serviceIDs = append(serviceIDs, r.ServiceID)
+		}
+	}
+	services, err := s.d.Services.GetByIDs(ctx, serviceIDs)
+	if err != nil {
+		return nil, 0, wrap(err)
+	}
+	serviceDomains := make(map[int64]string, len(services))
+	for _, sv := range services {
+		serviceDomains[sv.ID] = sv.Domain
+	}
+
+	clientNames := map[int64]string{}
+	views := make([]CancellationRequestView, 0, len(rows))
+	for _, r := range rows {
+		if _, ok := clientNames[r.ClientID]; !ok {
+			name := ""
+			if c, err := s.d.Clients.GetByID(ctx, r.ClientID); err == nil && c != nil {
+				name = c.FullName()
+			}
+			clientNames[r.ClientID] = name
+		}
+		views = append(views, CancellationRequestView{
+			CancellationRequest: r,
+			ServiceDomain:       serviceDomains[r.ServiceID],
+			ClientName:          clientNames[r.ClientID],
+		})
+	}
+	return views, total, nil
+}
+
+// AcceptCancellationRequest approves a pending end_of_term request: flags
+// panel_meta.cancel_at_period_end on the service (honoured by AutoTerminate)
+// and marks the request accepted.
+func (s *Service) AcceptCancellationRequest(ctx context.Context, actorUserID, requestID int64) error {
+	cr, err := s.d.CancellationRequests.GetByID(ctx, requestID)
+	if err != nil {
+		return wrap(err)
+	}
+	if cr.Mode != CancelModeEndOfTerm {
+		return apperr.Conflict("only end_of_term requests can be accepted/rejected - immediate requests process automatically")
+	}
+	if _, err := domain.TransitionCancellationRequest(cr.Status, domain.CancellationAccepted); err != nil {
+		return err
+	}
+	svc, err := s.d.Services.GetByID(ctx, cr.ServiceID)
+	if err != nil {
+		return wrap(err)
+	}
+	if svc.Status != domain.ServiceActive && svc.Status != domain.ServiceSuspended {
+		return apperr.Conflict("service is no longer eligible for cancellation")
+	}
+
+	meta := metaMap(svc.PanelMeta)
+	meta[metaCancelAtPeriodEnd] = true
+	svc.PanelMeta = marshalMeta(meta)
+	if err := s.d.Services.Update(ctx, svc); err != nil {
+		return wrap(err)
+	}
+
+	now := s.d.Clock.Now().UTC()
+	cr.Status = domain.CancellationAccepted
+	cr.DecidedAt = &now
+	cr.DecidedBy = &actorUserID
+	if err := s.d.CancellationRequests.Update(ctx, cr); err != nil {
+		return wrap(err)
+	}
+
+	s.d.Audit.Log(ctx, actorUserID, "service.cancel_request_accept", "service", svc.ID, nil,
+		map[string]any{"request_id": cr.ID, "mode": cr.Mode})
+	return nil
+}
+
+// RejectCancellationRequest denies a pending request; the service is left
+// completely untouched.
+func (s *Service) RejectCancellationRequest(ctx context.Context, actorUserID, requestID int64) error {
+	cr, err := s.d.CancellationRequests.GetByID(ctx, requestID)
+	if err != nil {
+		return wrap(err)
+	}
+	if cr.Mode != CancelModeEndOfTerm {
+		return apperr.Conflict("only end_of_term requests can be accepted/rejected - immediate requests process automatically")
+	}
+	if _, err := domain.TransitionCancellationRequest(cr.Status, domain.CancellationRejected); err != nil {
+		return err
+	}
+
+	now := s.d.Clock.Now().UTC()
+	cr.Status = domain.CancellationRejected
+	cr.DecidedAt = &now
+	cr.DecidedBy = &actorUserID
+	if err := s.d.CancellationRequests.Update(ctx, cr); err != nil {
+		return wrap(err)
+	}
+
+	s.d.Audit.Log(ctx, actorUserID, "service.cancel_request_reject", "service", cr.ServiceID, nil,
+		map[string]any{"request_id": cr.ID, "mode": cr.Mode})
+	return nil
 }
 
 // cancelOpenRenewalInvoices cancels unpaid/overdue invoices that contain a
@@ -1131,9 +1398,6 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 	if len(svc.PendingUpgrade) > 0 {
 		return nil, apperr.Conflict("an upgrade is already pending payment for this service")
 	}
-	if svc.ProductID == in.ProductID && svc.BillingCycle == in.Cycle {
-		return nil, apperr.Validation("service already uses this product and cycle")
-	}
 
 	current, err := s.d.Products.GetByID(ctx, svc.ProductID)
 	if err != nil {
@@ -1147,15 +1411,31 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 		return nil, apperr.Validation("target product must use the same server module",
 			apperr.FieldError{Field: "product_id", Message: "incompatible module"})
 	}
+
+	// Custom-spec (configurable) targets: validate and price the chosen knobs
+	// with the same rules as order checkout, so the prorated invoice carries
+	// every per-spec charge and ApplyUpgrade can reconfigure the panel package.
+	var upSpecs []domain.UpgradeSpec
+	var specTotal int64
 	if target.Configurable {
-		// UpgradeService only prorates the target's flat product_pricing row -
-		// it has no spec-selection input and never re-applies chosen_specs, so
-		// upgrading to a custom-spec product would silently under-price the
-		// invoice (dropping every per-spec charge) and never reconfigure the
-		// actual provisioned resources. Reject explicitly until spec-aware
-		// upgrades are built, rather than charge/apply the wrong thing.
-		return nil, apperr.Validation("target product is a custom-spec (configurable) product; Upgrade doesn't support spec selection yet",
-			apperr.FieldError{Field: "product_id", Message: "configurable products aren't supported by Upgrade"})
+		upSpecs, specTotal, err = s.resolveUpgradeSpecs(ctx, target.ID, in.Specs, in.Cycle)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(in.Specs) > 0 {
+		return nil, apperr.Validation("target product is not configurable",
+			apperr.FieldError{Field: "specs", Message: "product does not accept spec selections"})
+	}
+	if svc.ProductID == in.ProductID && svc.BillingCycle == in.Cycle {
+		// Same product+cycle is only meaningful for a configurable product
+		// whose specs actually change (a resize); anything else is a no-op.
+		if !target.Configurable {
+			return nil, apperr.Validation("service already uses this product and cycle")
+		}
+		if sameChosenSpecs(svc.PanelMeta, upSpecs) {
+			return nil, apperr.Validation("service already uses this configuration",
+				apperr.FieldError{Field: "specs", Message: "chosen specs match the current configuration"})
+		}
 	}
 
 	pricing, err := s.d.Products.GetPricing(ctx, target.ID, in.Cycle)
@@ -1163,6 +1443,7 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 		return nil, apperr.Validation("target product is not priced for this cycle",
 			apperr.FieldError{Field: "cycle", Message: "no price configured"})
 	}
+	targetPrice := pricing.Price + specTotal
 	if svc.NextDueDate == nil {
 		// Defensive: an active service should always have a next_due_date.
 		// Without one there's no cycle end to prorate against, and silently
@@ -1174,7 +1455,7 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 	now := s.d.Clock.Now().UTC()
 	until := *svc.NextDueDate
 	unused := domain.Prorate(svc.RecurringAmount, svc.BillingCycle, now, until)
-	charge := domain.Prorate(pricing.Price, in.Cycle, now, until)
+	charge := domain.Prorate(targetPrice, in.Cycle, now, until)
 	diff := charge - unused
 
 	if diff > 0 {
@@ -1182,10 +1463,14 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 		if err != nil {
 			return nil, wrap(err)
 		}
+		desc := fmt.Sprintf("Upgrade %s: %s -> %s (%s)", svc.Domain, current.Name, target.Name, in.Cycle)
+		if summary := upgradeSpecSummary(upSpecs); summary != "" {
+			desc += " - " + summary
+		}
 		inv, err := s.d.Billing.CreateInvoice(ctx, ports.CreateInvoiceInput{
 			ClientID: svc.ClientID,
 			Items: []ports.CreateInvoiceItem{{
-				Description: fmt.Sprintf("Upgrade %s: %s -> %s (%s)", svc.Domain, current.Name, target.Name, in.Cycle),
+				Description: desc,
 				Amount:      diff,
 				Taxed:       true,
 				RelatedType: domain.RelatedServiceUpgrade,
@@ -1199,7 +1484,8 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 
 		up := domain.ServiceUpgrade{
 			ProductID: target.ID, Cycle: in.Cycle,
-			RecurringAmount: pricing.Price, InvoiceID: inv.ID,
+			RecurringAmount: targetPrice, InvoiceID: inv.ID,
+			Specs: upSpecs,
 		}
 		raw, _ := json.Marshal(up)
 		svc.PendingUpgrade = raw
@@ -1208,7 +1494,8 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 		}
 
 		s.d.Audit.Log(ctx, actorUserID, "service.upgrade_requested", "service", svc.ID, nil,
-			map[string]any{"product_id": target.ID, "cycle": in.Cycle, "diff": diff, "invoice_id": inv.ID})
+			map[string]any{"product_id": target.ID, "cycle": in.Cycle, "diff": diff,
+				"invoice_id": inv.ID, "specs": upSpecs})
 		return &UpgradeResult{Applied: false, ProratedDiff: diff, Invoice: inv, Service: svc}, nil
 	}
 
@@ -1221,7 +1508,8 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 	err = s.d.Tx.WithinTx(ctx, func(txCtx context.Context) error {
 		svc.ProductID = target.ID
 		svc.BillingCycle = in.Cycle
-		svc.RecurringAmount = pricing.Price
+		svc.RecurringAmount = targetPrice
+		svc.PanelMeta = panelMetaWithChosenSpecs(svc.PanelMeta, upSpecs)
 		if err := s.d.Services.Update(txCtx, svc); err != nil {
 			return err
 		}
@@ -1236,14 +1524,177 @@ func (s *Service) UpgradeService(ctx context.Context, actorUserID, clientID, ser
 	}
 
 	if err := s.d.Queue.Enqueue(ctx, jobs.TypeProvisionChangePackage,
-		jobs.ProvisionChangePackagePayload{ServiceID: svc.ID, Package: target.PackageName},
+		jobs.ProvisionChangePackagePayload{ServiceID: svc.ID},
 		ports.WithQueue("critical")); err != nil {
 		return nil, wrap(err)
 	}
 
 	s.d.Audit.Log(ctx, actorUserID, "service.downgrade_applied", "service", svc.ID, before,
-		map[string]any{"product_id": target.ID, "cycle": in.Cycle, "credit": credit})
+		map[string]any{"product_id": target.ID, "cycle": in.Cycle, "credit": credit, "specs": upSpecs})
 	return &UpgradeResult{Applied: true, ProratedDiff: diff, CreditIssued: credit, Service: svc}, nil
+}
+
+// resolveUpgradeSpecs validates and prices the chosen dynamic specs of a
+// configurable upgrade target with the same rules as order checkout
+// (orders.planProduct/priceSpec): every defined knob is resolved (defaults for
+// the ones not chosen), quantities honor min/max/step and the unlimited flag,
+// and each knob adds qty-above-included times the cycle's unit price - or the
+// flat unlimited add-on - to the recurring amount.
+func (s *Service) resolveUpgradeSpecs(ctx context.Context, productID int64, chosen []UpgradeSpecInput, cycle domain.BillingCycle) ([]domain.UpgradeSpec, int64, error) {
+	defs, err := s.d.Products.ListSpecs(ctx, productID)
+	if err != nil {
+		return nil, 0, wrap(err)
+	}
+	byKey := make(map[string]UpgradeSpecInput, len(chosen))
+	for _, c := range chosen {
+		byKey[c.Key] = c
+	}
+
+	var (
+		out   []domain.UpgradeSpec
+		total int64
+		errs  []apperr.FieldError
+	)
+	valid := make(map[string]bool, len(defs))
+	for _, sp := range defs {
+		valid[sp.Key] = true
+		qty, unlimited := sp.DefaultQty, false
+		if c, ok := byKey[sp.Key]; ok {
+			qty, unlimited = c.Qty, c.Unlimited
+		}
+		fe := func(msg string) {
+			errs = append(errs, apperr.FieldError{Field: "specs." + sp.Key, Message: msg})
+		}
+		if unlimited {
+			if !sp.AllowUnlimited {
+				fe("unlimited is not allowed for this spec")
+				continue
+			}
+		} else {
+			bad := false
+			if qty < sp.MinQty {
+				fe(fmt.Sprintf("must be at least %d", sp.MinQty))
+				bad = true
+			}
+			if sp.MaxQty != 0 && qty > sp.MaxQty {
+				fe(fmt.Sprintf("must be at most %d", sp.MaxQty))
+				bad = true
+			}
+			if sp.StepQty > 1 && (qty-sp.MinQty)%sp.StepQty != 0 {
+				fe(fmt.Sprintf("must be in increments of %d", sp.StepQty))
+				bad = true
+			}
+			if bad {
+				continue
+			}
+		}
+
+		pricing, err := s.d.Products.GetSpecPricing(ctx, sp.ID, cycle)
+		if err != nil && apperr.From(err).Code != apperr.CodeNotFound {
+			return nil, 0, wrap(err)
+		}
+		us := domain.UpgradeSpec{
+			Key: sp.Key, ProvisionKey: string(sp.ProvisionKey), Unit: string(sp.Unit),
+			Qty: qty, Unlimited: unlimited,
+		}
+		if unlimited {
+			us.Qty = domain.UnlimitedQty
+			if pricing != nil {
+				us.Amount = pricing.UnlimitedPrice
+			}
+		} else if pricing != nil {
+			chargeable := qty - sp.IncludedQty
+			if chargeable < 0 {
+				chargeable = 0
+			}
+			us.Amount = chargeable * pricing.UnitPrice
+		}
+		total += us.Amount
+		out = append(out, us)
+	}
+	for k := range byKey {
+		if !valid[k] {
+			errs = append(errs, apperr.FieldError{Field: "specs." + k, Message: "unknown spec"})
+		}
+	}
+	if len(errs) > 0 {
+		return nil, 0, apperr.Validation("invalid spec selections", errs...)
+	}
+	return out, total, nil
+}
+
+// sameChosenSpecs reports whether the resolved upgrade specs match the
+// service's current chosen_specs snapshot knob-for-knob (key, qty, unlimited).
+// A service without a snapshot never matches, so a first-time spec selection
+// on the same product always goes through.
+func sameChosenSpecs(panelMeta json.RawMessage, specs []domain.UpgradeSpec) bool {
+	raw, ok := metaMap(panelMeta)[domain.PanelMetaChosenSpecs]
+	if !ok {
+		return false
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return false
+	}
+	var cur []chosenSpec
+	if err := json.Unmarshal(b, &cur); err != nil {
+		return false
+	}
+	if len(cur) != len(specs) {
+		return false
+	}
+	type choice struct {
+		qty       int64
+		unlimited bool
+	}
+	m := make(map[string]choice, len(cur))
+	for _, c := range cur {
+		m[c.Key] = choice{qty: c.Qty, unlimited: c.Unlimited}
+	}
+	for _, sp := range specs {
+		c, ok := m[sp.Key]
+		if !ok || c.qty != sp.Qty || c.unlimited != sp.Unlimited {
+			return false
+		}
+	}
+	return true
+}
+
+// panelMetaWithChosenSpecs returns panel_meta with the chosen_specs snapshot replaced
+// (or removed when the new configuration has no specs - e.g. moving to a
+// flat, non-configurable product).
+func panelMetaWithChosenSpecs(panelMeta json.RawMessage, specs []domain.UpgradeSpec) json.RawMessage {
+	meta := metaMap(panelMeta)
+	if len(specs) > 0 {
+		meta[domain.PanelMetaChosenSpecs] = specs
+	} else {
+		delete(meta, domain.PanelMetaChosenSpecs)
+	}
+	return marshalMeta(meta)
+}
+
+// upgradeSpecSummary renders a human-readable spec list for the upgrade
+// invoice line (same format as the order checkout's specSummary).
+func upgradeSpecSummary(specs []domain.UpgradeSpec) string {
+	if len(specs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		qty := "unlimited"
+		if !sp.Unlimited {
+			unit := ""
+			switch domain.SpecUnit(sp.Unit) {
+			case domain.UnitGB:
+				unit = "GB"
+			case domain.UnitMB:
+				unit = "MB"
+			}
+			qty = fmt.Sprintf("%d%s", sp.Qty, unit)
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", qty, sp.Key))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Admin: service actions
