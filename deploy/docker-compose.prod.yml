@@ -92,7 +92,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set via platform secrets}
       POSTGRES_DB: whmcs
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18+ keeps its data in a major-version subdirectory
+      # (/var/lib/postgresql/18/docker) and REFUSES to start when a mount sits
+      # at the legacy /var/lib/postgresql/data path — even an empty one — so the
+      # volume belongs one level up.
+      # https://github.com/docker-library/postgres/pull/1259
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U root -d whmcs"]
       interval: 10s
@@ -126,7 +131,7 @@ services:
     volumes:
       - rustfsdata:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || wget -q -O /dev/null http://localhost:9000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9000/health || wget -q -O /dev/null http://127.0.0.1:9000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 12
@@ -154,7 +159,10 @@ services:
       rustfs:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
+      # 127.0.0.1, not localhost: Fiber listens on tcp4 only, while busybox wget
+      # resolves localhost to ::1 first and gets connection-refused — leaving
+      # this container "starting" forever and blocking everything that waits on it.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -202,7 +210,11 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/ || exit 1"]
+      # ADDRESS_HEADER above makes SvelteKit throw on any request that arrives
+      # WITHOUT x-forwarded-for (the BFF forwards getClientAddress() to the API),
+      # so this probe — which bypasses the platform proxy — must supply it, or
+      # the container 500s itself into "unhealthy" and Traefik drops its route.
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header='x-forwarded-for: 127.0.0.1' http://127.0.0.1:3000/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6

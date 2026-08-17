@@ -1,0 +1,210 @@
+# WHCMS — Dokploy / Coolify stack that BUILDS FROM SOURCE.
+#
+# Difference from the two sibling files:
+#   * docker-compose.yml       — local dev: builds from source, publishes host
+#                                ports, mockserver profile, dev secret defaults.
+#   * docker-compose.prod.yml  — PULLS pre-built images from a registry.
+#   * THIS FILE                — builds the images on the platform host from the
+#                                cloned git checkout, so no registry is needed.
+#
+# Usage on the platform: point the compose service at this path
+# (`./deploy/docker-compose.dokploy.yml`) and set the env vars below through the
+# platform's secret manager (REQ-DEPLOY-003). Build contexts are the repository
+# root ("..") so the Dockerfiles in deploy/ can COPY backend/ and frontend/.
+#
+# Deliberately absent:
+#   * `name:` — Dokploy/Coolify inject their own compose project name.
+#   * host `ports:` — the platform's Traefik terminates TLS and routes traffic.
+#   * `networks:`/traefik labels — Dokploy appends both automatically from the
+#     domain records it manages; hand-written ones fight with the generated set.
+#   * rustfs — this file expects an EXTERNAL S3 endpoint (RUSTFS_ENDPOINT).
+#     To run storage in-stack instead, copy the rustfs service block out of
+#     docker-compose.prod.yml and point RUSTFS_ENDPOINT at http://rustfs:9000.
+#
+# DB migrations run automatically on API startup (REQ-DEPLOY-002); the first
+# admin account is created through the installation wizard at /install
+# (docs/CONTRACTS.md §15).
+#
+# Every var below has a working default EXCEPT the secrets, which are left
+# empty on purpose: if JWT_SECRET / APP_ENCRYPTION_KEY / DATABASE_URL are
+# missing the API deliberately serves the installation wizard's bootstrap phase
+# instead of failing to boot (internal/installer).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-production}
+  APP_PORT: "8080"
+  # Public base URL of the Go API. With the platform routing <host>/api to this
+  # service, that is the same host as the frontend — the Duitku callback URL is
+  # built as APP_BASE_URL + /api/v1/webhooks/duitku.
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+  JWT_SECRET: ${JWT_SECRET:-}
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+  DATABASE_URL: ${DATABASE_URL:-postgres://root:${POSTGRES_PASSWORD:-}@postgres:5432/whmcs?sslmode=disable}
+  REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_DB: ${REDIS_DB:-0}
+  RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+  RUSTFS_BUCKET: ${RUSTFS_BUCKET:-whmcs}
+  RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-true}
+  # Duitku / RDash keys are also admin-configurable at runtime (encrypted
+  # columns, CLAUDE.md §0.3) — these env values are only the fallback.
+  DUITKU_MERCHANT_CODE: ${DUITKU_MERCHANT_CODE:-}
+  DUITKU_API_KEY: ${DUITKU_API_KEY:-}
+  DUITKU_ENV: ${DUITKU_ENV:-production}
+  DUITKU_BASE_URL: ${DUITKU_BASE_URL:-}
+  RDASH_RESELLER_ID: ${RDASH_RESELLER_ID:-}
+  RDASH_API_KEY: ${RDASH_API_KEY:-}
+  RDASH_BASE_URL: ${RDASH_BASE_URL:-}
+  TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+  TURNSTILE_VERIFY_URL: ${TURNSTILE_VERIFY_URL:-}
+  MAIL_DRIVER: ${MAIL_DRIVER:-log}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  SMTP_ENCRYPTION: ${SMTP_ENCRYPTION:-auto}
+  SMTP_AUTH: ${SMTP_AUTH:-auto}
+  SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-20}
+  SMTP_INSECURE_SKIP_VERIFY: ${SMTP_INSECURE_SKIP_VERIFY:-false}
+  MAIL_HTTP_URL: ${MAIL_HTTP_URL:-}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-10}
+  ADMIN_ALERT_EMAIL: ${ADMIN_ALERT_EMAIL:-}
+  ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
+  ENV_FILE: /data/app.env
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: whmcs
+    volumes:
+      # postgres:18+ stores data in a major-version subdirectory
+      # (/var/lib/postgresql/18/docker) and REFUSES to start if a mount sits at
+      # the old /var/lib/postgresql/data path — mount one level up instead.
+      # https://github.com/docker-library/postgres/pull/1259
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d whmcs"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    command: redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a ${REDIS_PASSWORD}} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: whcms/backend:${TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    # The API drains in-flight requests for up to 10s on SIGTERM.
+    stop_grace_period: 30s
+    command: ["/app/api"]
+    environment: *backend-env
+    volumes:
+      - whcms_config:/data
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: Fiber listens on tcp4 only while busybox wget
+      # resolves localhost to ::1 first and gets connection-refused — which
+      # would keep this container "starting" forever and block the worker and
+      # frontend that wait on it.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: whcms/backend:${TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    # Let in-flight jobs finish (asynq drains on SIGTERM).
+    stop_grace_period: 30s
+    command: ["/app/worker"]
+    environment: *backend-env
+    volumes:
+      - whcms_config:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Migrations run on API startup; waiting for a healthy API keeps the
+      # worker from ever seeing a half-migrated schema.
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    image: whcms/frontend:${TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PORT: "3000"
+      # adapter-node caps request bodies at 512KB by default — below the
+      # ticket-attachment limit the API accepts through the BFF.
+      BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-25M}
+      # Server-side base URL of the Go API (BFF pattern, CONTRACTS.md §13).
+      API_URL: http://api:8080
+      PUBLIC_APP_NAME: ${PUBLIC_APP_NAME:-WHCMS}
+      # Behind the platform proxy, derive the origin from X-Forwarded-*
+      # instead of pinning ORIGIN — lets apex and www share one deployment.
+      PROTOCOL_HEADER: x-forwarded-proto
+      HOST_HEADER: x-forwarded-host
+      ADDRESS_HEADER: x-forwarded-for
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      # ADDRESS_HEADER makes SvelteKit throw on any request that arrives WITHOUT
+      # x-forwarded-for (the BFF forwards getClientAddress() to the API), so the
+      # probe — which bypasses the proxy — has to supply the header itself.
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header='x-forwarded-for: 127.0.0.1' http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  pgdata:
+  redisdata:
+  whcms_config:
