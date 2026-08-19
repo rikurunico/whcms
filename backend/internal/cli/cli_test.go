@@ -738,3 +738,156 @@ func TestTailLog(t *testing.T) {
 	err = tailLog(filepath.Join(tmpDir, "nonexistent.log"), false)
 	assert.NoError(t, err)
 }
+
+func TestGenerateConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &installConfig{
+		InstallDir: tmpDir,
+		Domain:     "test.example.com",
+		Port:       8080,
+		Email:      "admin@example.com",
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "config"), 0755))
+
+	err := generateConfig(cfg)
+	require.NoError(t, err)
+
+	envPath := filepath.Join(tmpDir, "config", "whcms.env")
+	assert.FileExists(t, envPath)
+
+	envContent, err := os.ReadFile(envPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(envContent), "APP_ENV=production")
+	assert.Contains(t, string(envContent), "APP_PORT=8080")
+	assert.Contains(t, string(envContent), "test.example.com")
+	assert.Contains(t, string(envContent), "admin@example.com")
+
+	composePath := filepath.Join(tmpDir, "config", "docker-compose.yml")
+	assert.FileExists(t, composePath)
+}
+
+func TestPromptInstallConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("interactive prompt test skipped on Windows")
+	}
+
+	cfg := installConfig{
+		Domain:   "test.com",
+		Email:    "test@example.com",
+		Password: "password123",
+	}
+
+	result, err := promptInstallConfig(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "test.com", result.Domain)
+	assert.Equal(t, "test@example.com", result.Email)
+}
+
+func TestInstallSystemdServices_NoSystemctl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd not available on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	cfg := &installConfig{
+		InstallDir: tmpDir,
+	}
+
+	err := installSystemdServices(cfg)
+	require.NoError(t, err)
+}
+
+func TestStartServices_NoSystemctl(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &installConfig{
+		InstallDir: tmpDir,
+	}
+
+	err := startServices(cfg)
+	require.NoError(t, err)
+}
+
+func TestInstallDependencies_DockerExists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Docker installation test skipped on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	cfg := &installConfig{
+		InstallDir: tmpDir,
+	}
+
+	err := installDependencies(cfg)
+	require.NoError(t, err)
+}
+
+func TestCmdResetAdmin_NoDatabase(t *testing.T) {
+	tmpDir := t.TempDir()
+	original := os.Getenv("WHCMS_HOME")
+	defer os.Setenv("WHCMS_HOME", original)
+
+	os.Setenv("WHCMS_HOME", tmpDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "config"), 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "config", "whcms.env"),
+		[]byte("DATABASE_URL=postgres://invalid:invalid@localhost:9999/invalid\n"),
+		0644,
+	))
+
+	err := cmdResetAdmin([]string{"--email", "admin@example.com", "--password", "newpassword123"})
+	assert.Error(t, err)
+}
+
+func TestCmdUpdate_CheckOnly(t *testing.T) {
+	// cmdUpdate --check hits the real GitHub API, which may fail in CI.
+	// Just verify it doesn't panic.
+	assert.NotPanics(t, func() {
+		_ = cmdUpdate([]string{"--check"})
+	})
+}
+
+func TestCmdBackup_NoStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	original := os.Getenv("WHCMS_HOME")
+	defer os.Setenv("WHCMS_HOME", original)
+
+	os.Setenv("WHCMS_HOME", tmpDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "config"), 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "config", "whcms.env"),
+		[]byte("DATABASE_URL=postgres://invalid:invalid@localhost:9999/invalid\n"),
+		0644,
+	))
+
+	err := cmdBackup([]string{"--no-storage"})
+	assert.Error(t, err)
+}
+
+func TestCmdRestore_NoInput(t *testing.T) {
+	err := cmdRestore([]string{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "--input")
+}
+
+func TestCmdRestore_NonexistentFile(t *testing.T) {
+	err := cmdRestore([]string{"--input", "/nonexistent/backup.tar.gz"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestCmdUninstall_Force(t *testing.T) {
+	tmpDir := t.TempDir()
+	original := os.Getenv("WHCMS_HOME")
+	defer os.Setenv("WHCMS_HOME", original)
+
+	os.Setenv("WHCMS_HOME", tmpDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "bin"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "bin", "whcms"), []byte("fake"), 0755))
+
+	err := cmdUninstall([]string{"--force"})
+	assert.NoError(t, err)
+
+	_, err = os.Stat(tmpDir)
+	assert.True(t, os.IsNotExist(err))
+}
