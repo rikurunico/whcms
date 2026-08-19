@@ -2,6 +2,7 @@ package cli
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -778,7 +779,7 @@ func TestPromptInstallConfig(t *testing.T) {
 		Password: "password123",
 	}
 
-	result, err := promptInstallConfig(cfg)
+	result, err := promptInstallConfig(bufio.NewReader(os.Stdin), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "test.com", result.Domain)
 	assert.Equal(t, "test@example.com", result.Email)

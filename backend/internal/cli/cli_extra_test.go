@@ -2,6 +2,7 @@ package cli
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -344,7 +345,7 @@ func TestInstallDependencies_ForcedNoDocker(t *testing.T) {
 func TestPromptInstallConfig_EmptyFieldsFromStdin(t *testing.T) {
 	withStdin(t, "mydomain.example\nme@example.com\nsupersecret1\n")
 
-	result, err := promptInstallConfig(installConfig{})
+	result, err := promptInstallConfig(bufio.NewReader(os.Stdin), installConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, "mydomain.example", result.Domain)
 	assert.Equal(t, "me@example.com", result.Email)
@@ -354,7 +355,7 @@ func TestPromptInstallConfig_EmptyFieldsFromStdin(t *testing.T) {
 func TestPromptInstallConfig_DefaultsOnEmptyInput(t *testing.T) {
 	withStdin(t, "\n\nlongenough1\n")
 
-	result, err := promptInstallConfig(installConfig{})
+	result, err := promptInstallConfig(bufio.NewReader(os.Stdin), installConfig{})
 	require.NoError(t, err)
 	hostname, _ := os.Hostname()
 	assert.Equal(t, hostname, result.Domain)
@@ -364,7 +365,7 @@ func TestPromptInstallConfig_DefaultsOnEmptyInput(t *testing.T) {
 func TestPromptInstallConfig_PasswordTooShort(t *testing.T) {
 	withStdin(t, "d.example\ne@example.com\nshort\n")
 
-	_, err := promptInstallConfig(installConfig{})
+	_, err := promptInstallConfig(bufio.NewReader(os.Stdin), installConfig{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "at least 8 characters")
 }

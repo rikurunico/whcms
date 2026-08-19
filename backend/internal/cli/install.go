@@ -35,9 +35,11 @@ func cmdInstall(args []string) error {
 
 	cfg := parseInstallFlags(args)
 
+	reader := bufio.NewReader(os.Stdin)
+
 	if !cfg.NonInteractive {
 		var err error
-		cfg, err = promptInstallConfig(cfg)
+		cfg, err = promptInstallConfig(reader, cfg)
 		if err != nil {
 			return err
 		}
@@ -57,7 +59,6 @@ func cmdInstall(args []string) error {
 
 	if !cfg.NonInteractive {
 		fmt.Print("Continue? [Y/n] ")
-		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(strings.ToLower(answer))
 		if answer != "" && answer != "y" && answer != "yes" {
@@ -143,9 +144,7 @@ func parseInstallFlags(args []string) installConfig {
 	return cfg
 }
 
-func promptInstallConfig(cfg installConfig) (installConfig, error) {
-	reader := bufio.NewReader(os.Stdin)
-
+func promptInstallConfig(reader *bufio.Reader, cfg installConfig) (installConfig, error) {
 	if cfg.Domain == "" {
 		hostname, _ := os.Hostname()
 		fmt.Printf("Domain [%s]: ", hostname)

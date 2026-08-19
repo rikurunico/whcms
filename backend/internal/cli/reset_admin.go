@@ -32,8 +32,12 @@ func cmdResetAdmin(args []string) error {
 		}
 	}
 
+	var reader *bufio.Reader
+	if email == "" || password == "" {
+		reader = bufio.NewReader(os.Stdin)
+	}
+
 	if email == "" {
-		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("Admin email: ")
 		email, _ = reader.ReadString('\n')
 		email = strings.TrimSpace(email)
@@ -44,7 +48,6 @@ func cmdResetAdmin(args []string) error {
 	}
 
 	if password == "" {
-		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("New password (min 8 chars): ")
 		password, _ = reader.ReadString('\n')
 		password = strings.TrimSpace(password)
