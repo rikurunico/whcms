@@ -300,10 +300,18 @@ func backupBinaries(installDir, backupPath string) error {
 	defer out.Close()
 
 	gw := gzip.NewWriter(out)
-	defer gw.Close()
+	defer func() {
+		if err := gw.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip writer: %v\n", err)
+		}
+	}()
 
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
+	defer func() {
+		if err := tw.Close(); err != nil {
+			fmt.Printf("Warning: failed to close tar writer: %v\n", err)
+		}
+	}()
 
 	binDir := filepath.Join(installDir, "bin")
 	binaries := []string{"whcms-api", "whcms-worker", "whcms-frontend"}
@@ -403,7 +411,11 @@ func extractUpdate(tarball, installDir string) error {
 	if err != nil {
 		return err
 	}
-	defer gr.Close()
+	defer func() {
+		if err := gr.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip reader: %v\n", err)
+		}
+	}()
 
 	tr := tar.NewReader(gr)
 	binDir := filepath.Join(installDir, "bin")
@@ -441,13 +453,17 @@ func restoreBinaries(backupPath, installDir string) error {
 func stopServices() {
 	services := []string{"whcms-api", "whcms-worker"}
 	for _, svc := range services {
-		exec.Command("systemctl", "stop", svc).Run()
+		if err := exec.Command("systemctl", "stop", svc).Run(); err != nil {
+			fmt.Printf("Warning: failed to stop %s: %v\n", svc, err)
+		}
 	}
 }
 
 func startServicesAfterUpdate() {
 	services := []string{"whcms-api", "whcms-worker"}
 	for _, svc := range services {
-		exec.Command("systemctl", "start", svc).Run()
+		if err := exec.Command("systemctl", "start", svc).Run(); err != nil {
+			fmt.Printf("Warning: failed to start %s: %v\n", svc, err)
+		}
 	}
 }

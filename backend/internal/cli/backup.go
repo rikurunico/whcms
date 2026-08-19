@@ -45,10 +45,18 @@ func cmdBackup(args []string) error {
 	defer out.Close()
 
 	gw := gzip.NewWriter(out)
-	defer gw.Close()
+	defer func() {
+		if err := gw.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip writer: %v\n", err)
+		}
+	}()
 
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
+	defer func() {
+		if err := tw.Close(); err != nil {
+			fmt.Printf("Warning: failed to close tar writer: %v\n", err)
+		}
+	}()
 
 	fmt.Println("[1/3] Backing up database...")
 	dbDumpPath := filepath.Join(os.TempDir(), "whcms-backup-db.sql")
@@ -124,7 +132,10 @@ func cmdRestore(args []string) error {
 
 	fmt.Print("This will overwrite current data. Continue? [y/N] ")
 	var answer string
-	fmt.Scanln(&answer)
+	if _, err := fmt.Scanln(&answer); err != nil {
+		fmt.Println("Restore cancelled.")
+		return nil
+	}
 	if strings.ToLower(answer) != "y" && strings.ToLower(answer) != "yes" {
 		fmt.Println("Restore cancelled.")
 		return nil
@@ -138,7 +149,11 @@ func cmdRestore(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Printf("Warning: failed to remove temp directory: %v\n", err)
+		}
+	}()
 
 	if err := extractTarGz(inputPath, tmpDir); err != nil {
 		return fmt.Errorf("failed to extract backup: %w", err)
@@ -158,21 +173,31 @@ func cmdRestore(args []string) error {
 	configDir := filepath.Join(tmpDir, "config")
 	if _, err := os.Stat(configDir); err == nil {
 		targetConfig := filepath.Join(installDir, "config")
-		os.MkdirAll(targetConfig, 0755)
-		copyDir(configDir, targetConfig)
+		if err := os.MkdirAll(targetConfig, 0755); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+		if err := copyDir(configDir, targetConfig); err != nil {
+			return fmt.Errorf("failed to copy config: %w", err)
+		}
 		fmt.Println("  ✓ Configuration restored")
 	}
 
 	storageDir := filepath.Join(tmpDir, "storage")
 	if _, err := os.Stat(storageDir); err == nil {
 		targetStorage := filepath.Join(installDir, "data", "storage")
-		os.MkdirAll(targetStorage, 0755)
-		copyDir(storageDir, targetStorage)
+		if err := os.MkdirAll(targetStorage, 0755); err != nil {
+			return fmt.Errorf("failed to create storage directory: %w", err)
+		}
+		if err := copyDir(storageDir, targetStorage); err != nil {
+			return fmt.Errorf("failed to copy storage: %w", err)
+		}
 		fmt.Println("  ✓ File storage restored")
 	}
 
 	fmt.Println("\nStarting services...")
-	startServices(nil)
+	if err := startServices(nil); err != nil {
+		fmt.Printf("Warning: failed to start services: %v\n", err)
+	}
 
 	fmt.Println("\n✓ Restore complete")
 	return nil
@@ -238,7 +263,11 @@ func extractTarGz(tarball, targetDir string) error {
 	if err != nil {
 		return err
 	}
-	defer gr.Close()
+	defer func() {
+		if err := gr.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip reader: %v\n", err)
+		}
+	}()
 
 	tr := tar.NewReader(gr)
 

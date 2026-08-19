@@ -1,3 +1,7 @@
+// Package cli implements the `whcms` command-line tool for installing,
+// updating, and managing a WHCMS deployment. It provides commands for
+// one-command installation, auto-update from GitHub Releases, service
+// status/logs, backup/restore, and admin password reset.
 package cli
 
 import (
@@ -93,7 +97,7 @@ Examples:
   whcms reset-admin --email admin@example.com --password newpassword
 
 Documentation: https://github.com/tsdlamongan/whcms
-`, Version, GitCommit[:min(7, len(GitCommit))])
+`, Version, shortCommit())
 	return nil
 }
 
@@ -114,9 +118,10 @@ func getInstallDir() string {
 	return filepath.Join(home, ".whcms")
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func shortCommit() string {
+	n := len(GitCommit)
+	if n > 7 {
+		n = 7
 	}
-	return b
+	return GitCommit[:n]
 }

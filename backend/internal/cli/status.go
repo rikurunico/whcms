@@ -123,15 +123,16 @@ func getServiceStatus(unit string) serviceStatus {
 				key, value := parts[0], parts[1]
 				switch key {
 				case "MainPID":
-					fmt.Sscanf(value, "%d", &status.PID)
+					if _, err := fmt.Sscanf(value, "%d", &status.PID); err != nil {
+						// Ignore parse errors, keep PID as 0
+					}
 				case "ActiveEnterTimestamp":
 					if t, err := time.Parse("2006-01-02 15:04:05 MST", value); err == nil {
 						status.Uptime = time.Since(t).Round(time.Second).String()
 					}
 				case "MemoryCurrent":
 					var bytes int64
-					fmt.Sscanf(value, "%d", &bytes)
-					if bytes > 0 {
+					if _, err := fmt.Sscanf(value, "%d", &bytes); err == nil && bytes > 0 {
 						status.Memory = formatBytes(bytes)
 					}
 				}
@@ -202,7 +203,9 @@ func cmdLogs(args []string) error {
 		return tailLog(filepath.Join(logDir, "worker.log"), follow)
 	default:
 		fmt.Println("=== API Logs ===")
-		tailLog(filepath.Join(logDir, "api.log"), false)
+		if err := tailLog(filepath.Join(logDir, "api.log"), false); err != nil {
+			return err
+		}
 		fmt.Println("\n=== Worker Logs ===")
 		return tailLog(filepath.Join(logDir, "worker.log"), follow)
 	}

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -595,25 +594,6 @@ func isPortAvailable(port int) bool {
 	if err != nil {
 		return false
 	}
-	ln.Close()
+	_ = ln.Close()
 	return true
-}
-
-func waitForService(url string, timeout time.Duration) error {
-	client := http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-		resp, err := client.Do(req)
-		cancel()
-
-		if err == nil && resp.StatusCode == http.StatusOK {
-			return nil
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	return fmt.Errorf("service not ready after %v", timeout)
 }

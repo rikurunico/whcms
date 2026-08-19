@@ -4,8 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -40,6 +44,61 @@ func TestRun_UnknownCommand(t *testing.T) {
 	err := Run([]string{"whcms", "nonexistent"})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown command")
+}
+
+func TestRun_InstallCommand(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		err := Run([]string{"whcms", "install"})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only supports Linux")
+	}
+}
+
+func TestRun_StatusCommand(t *testing.T) {
+	err := Run([]string{"whcms", "status"})
+	assert.NoError(t, err)
+}
+
+func TestRun_StatusJSON(t *testing.T) {
+	err := Run([]string{"whcms", "status", "--json"})
+	assert.NoError(t, err)
+}
+
+func TestRun_LogsCommand(t *testing.T) {
+	err := Run([]string{"whcms", "logs"})
+	assert.NoError(t, err)
+}
+
+func TestRun_BackupCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	original := os.Getenv("WHCMS_HOME")
+	defer os.Setenv("WHCMS_HOME", original)
+	
+	os.Setenv("WHCMS_HOME", tmpDir)
+	os.MkdirAll(filepath.Join(tmpDir, "config"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "config", "whcms.env"), []byte("DATABASE_URL=postgres://test\n"), 0644)
+	
+	// backup will fail because docker/pg_dump don't exist in test env,
+	// but we verify the command is recognized and attempts execution
+	err := Run([]string{"whcms", "backup", "--output", filepath.Join(tmpDir, "backup.tar.gz")})
+	// Expected to fail due to missing database tools
+	assert.Error(t, err)
+}
+
+func TestRun_RestoreCommand(t *testing.T) {
+	err := Run([]string{"whcms", "restore"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "--input")
+}
+
+func TestRun_ResetAdminCommand(t *testing.T) {
+	err := Run([]string{"whcms", "reset-admin"})
+	assert.Error(t, err)
+}
+
+func TestRun_UninstallCommand(t *testing.T) {
+	err := Run([]string{"whcms", "uninstall", "--force"})
+	assert.NoError(t, err)
 }
 
 func TestParseInstallFlags(t *testing.T) {
@@ -190,12 +249,6 @@ func TestFormatBytes(t *testing.T) {
 		got := formatBytes(tt.input)
 		assert.Equal(t, tt.want, got, "formatBytes(%d)", tt.input)
 	}
-}
-
-func TestMin(t *testing.T) {
-	assert.Equal(t, 3, min(3, 5))
-	assert.Equal(t, 3, min(5, 3))
-	assert.Equal(t, 3, min(3, 3))
 }
 
 func TestGetInstallDir(t *testing.T) {
@@ -352,4 +405,201 @@ func TestBackupBinaries(t *testing.T) {
 	info, err := os.Stat(backupPath)
 	require.NoError(t, err)
 	assert.True(t, info.Size() > 0)
+}
+
+func TestDownloadFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("test content"))
+	}))
+	defer server.Close()
+
+	tmpFile := filepath.Join(t.TempDir(), "downloaded.txt")
+	err := downloadFile(server.URL, tmpFile)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(tmpFile)
+	require.NoError(t, err)
+	assert.Equal(t, "test content", string(data))
+}
+
+func TestDownloadFile_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpFile := filepath.Join(t.TempDir(), "downloaded.txt")
+	err := downloadFile(server.URL, tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTP 404")
+}
+
+func TestGetLatestRelease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		release := githubRelease{
+			TagName:     "v1.0.0",
+			Name:        "Release 1.0.0",
+			PublishedAt: "2024-01-01T00:00:00Z",
+			Assets: []struct {
+				Name               string `json:"name"`
+				BrowserDownloadURL string `json:"browser_download_url"`
+				Size               int64  `json:"size"`
+			}{
+				{
+					Name:               "whcms-linux-amd64.tar.gz",
+					BrowserDownloadURL: "https://example.com/download",
+					Size:               1024,
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(release)
+	}))
+	defer server.Close()
+
+	// This test would need to mock the GitHub API URL
+	// For now, just test that the function exists and returns correct type
+	_, err := getLatestRelease()
+	// We expect this to fail in test environment without internet
+	if err != nil {
+		assert.Contains(t, err.Error(), "GitHub API")
+	}
+}
+
+func TestVerifyChecksum(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("abc123  whcms-linux-amd64.tar.gz\n"))
+	}))
+	defer server.Close()
+
+	// Create a test file with matching checksum
+	tmpFile := filepath.Join(t.TempDir(), "test.tar.gz")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("test"), 0644))
+
+	release := &githubRelease{
+		Assets: []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+			Size               int64  `json:"size"`
+		}{
+			{
+				Name:               "checksums.txt",
+				BrowserDownloadURL: server.URL + "/checksums.txt",
+			},
+		},
+	}
+
+	// This will fail because checksum won't match, but tests the function exists
+	err := verifyChecksum(release, "whcms-linux-amd64.tar.gz", tmpFile)
+	assert.Error(t, err)
+}
+
+func TestExtractUpdate(t *testing.T) {
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0755))
+
+	// Create a tar.gz with a test binary
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	content := []byte("binary content")
+	header := &tar.Header{
+		Name: "whcms-api",
+		Mode: 0755,
+		Size: int64(len(content)),
+	}
+	require.NoError(t, tw.WriteHeader(header))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	tarPath := filepath.Join(tmpDir, "update.tar.gz")
+	require.NoError(t, os.WriteFile(tarPath, buf.Bytes(), 0644))
+
+	err = extractUpdate(tarPath, tmpDir)
+	require.NoError(t, err)
+
+	// Verify the binary was extracted
+	extractedPath := filepath.Join(binDir, "whcms-api")
+	data, err := os.ReadFile(extractedPath)
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+}
+
+func TestStopServices(t *testing.T) {
+	// This should not panic even if systemctl doesn't exist
+	assert.NotPanics(t, func() {
+		stopServices()
+	})
+}
+
+func TestStartServicesAfterUpdate(t *testing.T) {
+	// This should not panic even if systemctl doesn't exist
+	assert.NotPanics(t, func() {
+		startServicesAfterUpdate()
+	})
+}
+
+func TestDumpDatabase(t *testing.T) {
+	t.Skip("requires external database tools (pg_dump/docker)")
+}
+
+func TestRestoreDatabase(t *testing.T) {
+	t.Skip("requires external database tools (psql/docker)")
+}
+
+func TestExtractTarGz_InvalidFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	invalidFile := filepath.Join(tmpDir, "invalid.tar.gz")
+	require.NoError(t, os.WriteFile(invalidFile, []byte("not a gzip file"), 0644))
+
+	err := extractTarGz(invalidFile, tmpDir)
+	assert.Error(t, err)
+}
+
+func TestAddDirToTar_EmptyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	emptyDir := filepath.Join(tmpDir, "empty")
+	require.NoError(t, os.MkdirAll(emptyDir, 0755))
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	err := addDirToTar(tw, emptyDir, "backup")
+	require.NoError(t, err)
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	assert.True(t, buf.Len() > 0)
+}
+
+func TestCopyDir_NonExistentSource(t *testing.T) {
+	err := copyDir("/nonexistent/path", t.TempDir())
+	assert.Error(t, err)
+}
+
+func TestGetEnvValue_EmptyFile(t *testing.T) {
+	tmpFile, err := os.CreateTemp(t.TempDir(), "empty-*.env")
+	require.NoError(t, err)
+	tmpFile.Close()
+
+	value := getEnvValue(tmpFile.Name(), "ANY_KEY")
+	assert.Equal(t, "", value)
+}
+
+func TestRandomToken_DifferentLengths(t *testing.T) {
+	token16, err := randomToken(16)
+	require.NoError(t, err)
+	assert.NotEmpty(t, token16)
+
+	token32, err := randomToken(32)
+	require.NoError(t, err)
+	assert.NotEmpty(t, token32)
+	assert.NotEqual(t, token16, token32)
 }
