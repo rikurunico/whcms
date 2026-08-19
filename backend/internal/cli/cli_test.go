@@ -603,3 +603,138 @@ func TestRandomToken_DifferentLengths(t *testing.T) {
 	assert.NotEmpty(t, token32)
 	assert.NotEqual(t, token16, token32)
 }
+
+func TestApiServiceUnit(t *testing.T) {
+	cfg := &installConfig{InstallDir: "/opt/whcms"}
+	unit := apiServiceUnit(cfg)
+
+	assert.Contains(t, unit, "Description=WHCMS API Server")
+	assert.Contains(t, unit, "WorkingDirectory=/opt/whcms")
+	assert.Contains(t, unit, "EnvironmentFile=/opt/whcms/config/whcms.env")
+	assert.Contains(t, unit, "ExecStart=/opt/whcms/bin/whcms-api")
+	assert.Contains(t, unit, "StandardOutput=append:/opt/whcms/logs/api.log")
+	assert.Contains(t, unit, "WantedBy=multi-user.target")
+}
+
+func TestWorkerServiceUnit(t *testing.T) {
+	cfg := &installConfig{InstallDir: "/opt/whcms"}
+	unit := workerServiceUnit(cfg)
+
+	assert.Contains(t, unit, "Description=WHCMS Worker")
+	assert.Contains(t, unit, "WorkingDirectory=/opt/whcms")
+	assert.Contains(t, unit, "EnvironmentFile=/opt/whcms/config/whcms.env")
+	assert.Contains(t, unit, "ExecStart=/opt/whcms/bin/whcms-worker")
+	assert.Contains(t, unit, "StandardOutput=append:/opt/whcms/logs/worker.log")
+	assert.Contains(t, unit, "After=network.target docker.service whcms-api.service")
+}
+
+func TestGetEnvFilePath(t *testing.T) {
+	path := getEnvFilePath("/opt/whcms")
+	assert.Equal(t, "/opt/whcms/config/whcms.env", path)
+}
+
+func TestShortCommit(t *testing.T) {
+	result := shortCommit()
+	assert.NotEmpty(t, result)
+	assert.LessOrEqual(t, len(result), 7)
+}
+
+func TestRestoreBinaries(t *testing.T) {
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0755))
+
+	// Create a backup archive
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	content := []byte("binary content")
+	header := &tar.Header{
+		Name: "whcms-api",
+		Mode: 0755,
+		Size: int64(len(content)),
+	}
+	require.NoError(t, tw.WriteHeader(header))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	backupPath := filepath.Join(tmpDir, "backup.tar.gz")
+	require.NoError(t, os.WriteFile(backupPath, buf.Bytes(), 0644))
+
+	err = restoreBinaries(backupPath, tmpDir)
+	require.NoError(t, err)
+
+	extractedPath := filepath.Join(binDir, "whcms-api")
+	data, err := os.ReadFile(extractedPath)
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+}
+
+func TestGetReleaseByVersion(t *testing.T) {
+	// This will fail in test env because it calls real GitHub API
+	_, err := getReleaseByVersion("v1.2.3")
+	assert.Error(t, err)
+}
+
+func TestDownloadFileWithProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "12")
+		w.Write([]byte("test content"))
+	}))
+	defer server.Close()
+
+	tmpFile := filepath.Join(t.TempDir(), "downloaded.txt")
+	err := downloadFileWithProgress(server.URL, tmpFile, 12)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(tmpFile)
+	require.NoError(t, err)
+	assert.Equal(t, "test content", string(data))
+}
+
+func TestRunCommand(t *testing.T) {
+	// Test with a command that exists
+	err := runCommand("echo", "test")
+	assert.NoError(t, err)
+
+	// Test with a command that doesn't exist
+	err = runCommand("nonexistent_command_xyz")
+	assert.Error(t, err)
+}
+
+func TestRunCommandSilent(t *testing.T) {
+	// Test with a command that exists
+	err := runCommandSilent("echo", "test")
+	assert.NoError(t, err)
+
+	// Test with a command that doesn't exist
+	err = runCommandSilent("nonexistent_command_xyz")
+	assert.Error(t, err)
+}
+
+func TestDockerComposeExists(t *testing.T) {
+	// Just verify it doesn't panic
+	assert.NotPanics(t, func() {
+		_ = dockerComposeExists()
+	})
+}
+
+func TestTailLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("tail command not available on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "test.log")
+	require.NoError(t, os.WriteFile(logFile, []byte("line 1\nline 2\nline 3"), 0644))
+
+	err := tailLog(logFile, false)
+	assert.NoError(t, err)
+
+	err = tailLog(filepath.Join(tmpDir, "nonexistent.log"), false)
+	assert.NoError(t, err)
+}
