@@ -785,8 +785,8 @@ func TestPromptInstallConfig(t *testing.T) {
 }
 
 func TestInstallSystemdServices_NoSystemctl(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("systemd not available on Windows")
+	if runtime.GOOS != "windows" {
+		t.Skip("only runs on Windows where systemctl is absent")
 	}
 
 	tmpDir := t.TempDir()
