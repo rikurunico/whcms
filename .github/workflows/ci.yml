@@ -33,7 +33,8 @@ jobs:
             mockserver:
               - 'mockserver/**'
             e2e:
-              - 'frontend/tests/e2e/**'
+              - 'frontend/**'
+              - 'backend/**'
               - 'scripts/**'
               - 'Makefile'
 
