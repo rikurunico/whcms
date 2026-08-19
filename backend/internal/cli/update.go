@@ -151,7 +151,13 @@ func cmdUpdate(args []string) error {
 	return nil
 }
 
-func getLatestRelease() (*githubRelease, error) {
+// getLatestRelease/getReleaseByVersion are package vars so tests can
+// substitute a fake GitHub release (pointing asset URLs at an httptest
+// server) and exercise cmdUpdate's download/verify/extract/rollback
+// orchestration without hitting the real GitHub API.
+var getLatestRelease = getLatestReleaseImpl
+
+func getLatestReleaseImpl() (*githubRelease, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -259,7 +265,9 @@ func runMigrations(installDir string) error {
 	return cmd.Run()
 }
 
-func getReleaseByVersion(version string) (*githubRelease, error) {
+var getReleaseByVersion = getReleaseByVersionImpl
+
+func getReleaseByVersionImpl(version string) (*githubRelease, error) {
 	if !strings.HasPrefix(version, "v") {
 		version = "v" + version
 	}

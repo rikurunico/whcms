@@ -114,31 +114,39 @@ func getServiceStatus(unit string) serviceStatus {
 	if status.Status == "active" {
 		cmd = exec.Command("systemctl", "show", unit, "--property=MainPID,ActiveEnterTimestamp,MemoryCurrent")
 		if output, err := cmd.Output(); err == nil {
-			lines := strings.Split(string(output), "\n")
-			for _, line := range lines {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				key, value := parts[0], parts[1]
-				switch key {
-				case "MainPID":
-					_, _ = fmt.Sscanf(value, "%d", &status.PID)
-				case "ActiveEnterTimestamp":
-					if t, err := time.Parse("2006-01-02 15:04:05 MST", value); err == nil {
-						status.Uptime = time.Since(t).Round(time.Second).String()
-					}
-				case "MemoryCurrent":
-					var bytes int64
-					if _, err := fmt.Sscanf(value, "%d", &bytes); err == nil && bytes > 0 {
-						status.Memory = formatBytes(bytes)
-					}
-				}
-			}
+			parseSystemctlShow(&status, string(output))
 		}
 	}
 
 	return status
+}
+
+// parseSystemctlShow fills in PID/Uptime/Memory on status from the
+// `KEY=VALUE`-per-line output of `systemctl show --property=...`. Split out
+// from getServiceStatus so this pure parsing logic can be unit-tested with
+// fabricated output, independent of whether a real systemd is available.
+func parseSystemctlShow(status *serviceStatus, output string) {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, value := parts[0], parts[1]
+		switch key {
+		case "MainPID":
+			_, _ = fmt.Sscanf(value, "%d", &status.PID)
+		case "ActiveEnterTimestamp":
+			if t, err := time.Parse("2006-01-02 15:04:05 MST", value); err == nil {
+				status.Uptime = time.Since(t).Round(time.Second).String()
+			}
+		case "MemoryCurrent":
+			var bytes int64
+			if _, err := fmt.Sscanf(value, "%d", &bytes); err == nil && bytes > 0 {
+				status.Memory = formatBytes(bytes)
+			}
+		}
+	}
 }
 
 func formatBytes(bytes int64) string {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -433,6 +434,11 @@ func createAdminUser(cfg *installConfig) error {
 	return nil
 }
 
+// systemdUnitDir is a package var (not a hardcoded literal) so tests can
+// point it at a temp directory and exercise installSystemdServices' write/
+// daemon-reload logic without touching the real system or needing root.
+var systemdUnitDir = "/etc/systemd/system"
+
 func installSystemdServices(cfg *installConfig) error {
 	if !commandExists("systemctl") {
 		fmt.Println("  (systemd not available, skipping)")
@@ -445,7 +451,7 @@ func installSystemdServices(cfg *installConfig) error {
 	}
 
 	for name, content := range services {
-		unitPath := filepath.Join("/etc/systemd/system", name)
+		unitPath := filepath.Join(systemdUnitDir, name)
 		if err := os.WriteFile(unitPath, []byte(content), 0644); err != nil {
 			if os.IsPermission(err) {
 				fmt.Printf("  Warning: Cannot write %s (need sudo)\n", name)
@@ -522,7 +528,10 @@ WantedBy=multi-user.target
 `, cfg.InstallDir, cfg.InstallDir, cfg.InstallDir, cfg.InstallDir, cfg.InstallDir)
 }
 
-func commandExists(cmd string) bool {
+// commandExists is a package var (not a plain func) so tests can force
+// either branch of the many `if commandExists("...")` checks throughout this
+// package deterministically, regardless of what's actually on the host PATH.
+var commandExists = func(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
 }
@@ -532,7 +541,10 @@ func dockerComposeExists() bool {
 	return err == nil
 }
 
-func runCommand(name string, args ...string) error {
+// runCommand is a package var so tests can stub out real process execution
+// (e.g. to force installDependencies' "docker installation failed" branch)
+// without actually shelling out.
+var runCommand = func(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -544,7 +556,12 @@ func runCommandSilent(name string, args ...string) error {
 	return cmd.Run()
 }
 
-func downloadFile(url, filepath string) error {
+// downloadFile is a package var so tests can substitute a fake implementation
+// and exercise downloadWHCMS's tar extraction/chmod logic without a network
+// call to GitHub.
+var downloadFile = downloadFileImpl
+
+func downloadFileImpl(url, filepath string) error {
 	client := http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -581,9 +598,13 @@ func downloadFile(url, filepath string) error {
 	return nil
 }
 
+// randReader is a package var (defaults to crypto/rand's Reader) so tests can
+// force randomToken's error branch deterministically.
+var randReader io.Reader = rand.Reader
+
 func randomToken(numBytes int) (string, error) {
 	b := make([]byte, numBytes)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := io.ReadFull(randReader, b); err != nil {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(b), nil

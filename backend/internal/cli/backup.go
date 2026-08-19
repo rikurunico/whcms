@@ -203,7 +203,13 @@ func cmdRestore(args []string) error {
 	return nil
 }
 
-func dumpDatabase(installDir, outputPath string) error {
+// dumpDatabase/restoreDatabase are package vars (not plain funcs) so tests
+// can substitute a fake implementation and exercise cmdBackup/cmdRestore's
+// surrounding orchestration (archive layout, prompts, service stop/start)
+// without needing a real pg_dump/psql/docker toolchain.
+var dumpDatabase = dumpDatabaseImpl
+
+func dumpDatabaseImpl(installDir, outputPath string) error {
 	envFile := filepath.Join(installDir, "config", "whcms.env")
 	dbURL := getEnvValue(envFile, "DATABASE_URL")
 	if dbURL == "" {
@@ -228,7 +234,9 @@ func dumpDatabase(installDir, outputPath string) error {
 	return os.WriteFile(outputPath, output, 0644)
 }
 
-func restoreDatabase(installDir, dumpPath string) error {
+var restoreDatabase = restoreDatabaseImpl
+
+func restoreDatabaseImpl(installDir, dumpPath string) error {
 	if commandExists("docker") {
 		composePath := filepath.Join(installDir, "config", "docker-compose.yml")
 		cmd := exec.Command("docker", "compose", "-f", composePath,
