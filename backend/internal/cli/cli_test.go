@@ -73,11 +73,11 @@ func TestRun_BackupCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	original := os.Getenv("WHCMS_HOME")
 	defer os.Setenv("WHCMS_HOME", original)
-	
+
 	os.Setenv("WHCMS_HOME", tmpDir)
 	os.MkdirAll(filepath.Join(tmpDir, "config"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "config", "whcms.env"), []byte("DATABASE_URL=postgres://test\n"), 0644)
-	
+
 	// backup will fail because docker/pg_dump don't exist in test env,
 	// but we verify the command is recognized and attempts execution
 	err := Run([]string{"whcms", "backup", "--output", filepath.Join(tmpDir, "backup.tar.gz")})

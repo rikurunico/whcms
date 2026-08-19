@@ -123,9 +123,7 @@ func getServiceStatus(unit string) serviceStatus {
 				key, value := parts[0], parts[1]
 				switch key {
 				case "MainPID":
-					if _, err := fmt.Sscanf(value, "%d", &status.PID); err != nil {
-						// Ignore parse errors, keep PID as 0
-					}
+					_, _ = fmt.Sscanf(value, "%d", &status.PID)
 				case "ActiveEnterTimestamp":
 					if t, err := time.Parse("2006-01-02 15:04:05 MST", value); err == nil {
 						status.Uptime = time.Since(t).Round(time.Second).String()
